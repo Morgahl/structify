@@ -19,6 +19,7 @@ Structify is an Elixir library that provides powerful functionality to coerce be
 ### Core Capabilities
 
 - **Type Conversions**: Maps ↔ Structs, Lists of Maps ↔ Lists of Structs
+- **String Key Coercion**: Automatic conversion of string keys to atoms when targeting structs
 - **Nested Transformations**: Deep recursive processing with configurable rules
 - **Module Shorthand Syntax**: `field: MyStruct` equivalent to `field: [__to__: MyStruct]`
 - **Well-known Type Preservation**: Date, Time, NaiveDateTime, DateTime pass through unchanged
@@ -58,8 +59,30 @@ iex> input = %{name: "Alice", email: "alice@example.com", age: 30}
 iex> Structify.coerce(input, User)
 %User{name: "Alice", email: "alice@example.com", age: 30}
 
+iex> input = %{name: "Alice", email: "alice@example.com", age: 30}
 iex> Structify.convert(input, User)
 {:ok, %User{name: "Alice", email: "alice@example.com", age: 30}}
+```
+
+## String Key Coercion
+
+Structify automatically handles string keys when converting to structs:
+
+```elixir
+# String keys are converted to atoms when targeting structs
+iex> input = %{"name" => "Alice", "email" => "alice@example.com", "age" => 30}
+iex> Structify.coerce(input, User)
+%User{name: "Alice", email: "alice@example.com", age: 30}
+
+# String keys are preserved when targeting maps
+iex> input = %{"name" => "Alice", "email" => "alice@example.com", "age" => 30}
+iex> Structify.coerce(input, nil)
+%{"name" => "Alice", "email" => "alice@example.com", "age" => 30}
+
+# Mixed key types work gracefully
+iex> input = %{:name => "Alice", "email" => "alice@example.com", "age" => 30}
+iex> Structify.coerce(input, User)
+%User{name: "Alice", email: "alice@example.com", age: 30}
 ```
 
 ## Nested Transformations
@@ -139,7 +162,7 @@ result = Structify.coerce(input, nil, nested)
 ```elixir
 # Convert provides detailed error information
 iex> Structify.convert(%{invalid: "data"}, NonExistentModule)
-{:error, "NonExistentModule is not a valid struct module"}
+{:error, {UndefinedFunctionError, NonExistentModule}}
 
 # No-change optimization
 iex> user = %User{name: "Alice", email: "alice@example.com", age: 30}
@@ -151,7 +174,7 @@ iex> Structify.convert!(%{name: "Alice"}, User)
 %User{name: "Alice", email: nil, age: nil}
 
 iex> Structify.convert!(%{invalid: "data"}, NonExistentModule)
-** (ArgumentError) Conversion failed: NonExistentModule is not a valid struct module
+** (UndefinedFunctionError) Conversion failed: NonExistentModule
 ```
 
 ## Configuration Options
@@ -196,9 +219,10 @@ Date, Time, NaiveDateTime, and DateTime structs are preserved unchanged:
 
 ```elixir
 iex> date = ~D[2023-09-18]
-iex> Structify.coerce(date, SomeOtherStruct)
+iex> Structify.coerce(date, User)
 ~D[2023-09-18]  # Returned unchanged
 
+iex> date = ~D[2023-09-18]
 iex> Structify.convert(date, nil)
 {:no_change, ~D[2023-09-18]}
 ```
@@ -216,8 +240,8 @@ Performs lossy conversion, returning the result directly.
 ### Structify.convert/3
 
 ```elixir
-@spec convert(term(), module() | nil, keyword() | map()) :: 
-  {:ok, term()} | {:error, String.t()} | {:no_change, term()}
+@spec convert(term(), module() | nil, keyword() | map()) ::
+  {:ok, term()} | {:error, {Exception.t(), module()}} | {:no_change, term()}
 ```
 
 Performs lossless conversion with explicit result tuples.
@@ -228,7 +252,7 @@ Performs lossless conversion with explicit result tuples.
 @spec convert!(term(), module() | nil, keyword() | map()) :: term()
 ```
 
-Like `convert/3` but raises `ArgumentError` on error, returns result directly on success.
+Like `convert/3` but raises the appropriate exception on error, returns result directly on success.
 
 ## Documentation
 

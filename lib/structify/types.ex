@@ -8,13 +8,13 @@ defmodule Structify.Types do
 
   Can be:
   - A struct (any struct type)
-  - A map
+  - A map with atom keys only (`%{atom() => any()}`)
   - A list of any of these types (recursively)
 
   Note: Well-known structs like `Date`, `Time`, `NaiveDateTime`, and `DateTime`
   pass through unchanged regardless of the target type.
   """
-  @type t :: struct() | map() | [t()]
+  @type structifiable() :: struct() | %{atom() => any()} | [structifiable()]
 
   @typedoc """
   Configuration for nested conversion rules.

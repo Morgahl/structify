@@ -13,6 +13,16 @@ defmodule Structify.Coerce do
     * If `from` is a map and `to` is a module, the result will be a struct of type `to`.
     * If `from` is a map and `to` is `nil`, the result will be a map.
 
+  # String Key Coercion
+
+  When converting maps to structs, string keys are automatically coerced to atoms:
+
+    * String keys are converted to atoms using `String.to_existing_atom/1` when targeting structs
+    * If the atom doesn't exist, the key-value pair is filtered out (ignored)
+    * When targeting maps (`to` is `nil`), string keys are preserved as strings
+    * Non-string, non-atom keys are filtered out when targeting structs
+    * Mixed key types are handled gracefully with atom keys taking precedence
+
   # Nested Coercion Rules
 
   * `nested` must be a keyword list or map.
@@ -41,12 +51,9 @@ defmodule Structify.Coerce do
   alias Structify.Constants
   alias Structify.Types
 
-  @to_key :__to__
+  @to_key Constants.to_key()
   @meta_keys Constants.meta_keys()
   @well_known_structs Constants.well_known_structs()
-
-  @type t :: Types.t()
-  @type nested :: Types.nested()
 
   @doc """
   Coerces `from` into the type specified by `to`, optionally using `nested` for nested coercion rules.
@@ -98,13 +105,23 @@ defmodule Structify.Coerce do
       iex> Coerce.coerce([], A)
       []
 
+      # String key coercion examples
+      iex> input = %{"foo" => "test", "bar" => true}
+      iex> Coerce.coerce(input, A)
+      %A{foo: "test", bar: true}
+
+      iex> input = %{"foo" => "test", "bar" => true}
+      iex> Coerce.coerce(input, nil)
+      %{"foo" => "test", "bar" => true}
+
       iex> d = ~D[2025-09-18]
       iex> Coerce.coerce(d, nil) == d
       true
       iex> Coerce.coerce(d, A) == d
       true
   """
-  @spec coerce(t() | nil, module() | nil, nested()) :: t() | nil
+  @spec coerce(Types.structifiable() | nil, module() | nil, Types.nested()) ::
+          Types.structifiable() | nil
   def coerce(from, to \\ nil, nested \\ [])
 
   def coerce(from, to, %{} = nested) do
@@ -117,6 +134,10 @@ defmodule Structify.Coerce do
     end
   end
 
+  def coerce(%{__struct__: to} = from, to, []) do
+    from
+  end
+
   def coerce(%{__struct__: struct} = from, _, _) when struct in @well_known_structs do
     from
   end
@@ -127,48 +148,39 @@ defmodule Structify.Coerce do
     |> coerce(to, nested)
   end
 
-  def coerce(%{} = from, to, nested) when is_atom(to) and is_list(nested) do
-    for {k, v} <- from, k not in @meta_keys do
-      case nested[k] do
-        nil ->
-          {k, v}
+  def coerce(%{} = from, to, nested) when is_list(nested) do
+    for {k, v} <- from, atom_k = coerce_key(k, to), atom_k not in @meta_keys do
+      output_key = if to == nil, do: k, else: atom_k
+      lookup_key = if is_atom(atom_k), do: atom_k, else: nil
 
-        nested_k when is_list(nested_k) and (is_map(v) or is_list(v)) ->
-          {k, coerce(v, nested_k[@to_key], nested_k)}
-
-        nested_k when is_atom(nested_k) and (is_map(v) or is_list(v)) ->
-          {k, coerce(v, nested_k, [])}
-
-        _ ->
-          {k, v}
+      case nested[lookup_key] do
+        nested_k when is_list(nested_k) -> {output_key, coerce(v, nested_k[@to_key], nested_k)}
+        nested_k -> {output_key, coerce(v, nested_k, [])}
       end
     end
     |> maybe_struct(to)
-  end
-
-  def coerce(%{} = from, nil, nested) when is_list(nested) do
-    for {k, v} <- from, k not in @meta_keys do
-      case nested[k] do
-        nil ->
-          {k, v}
-
-        nested_k when is_list(nested_k) and (is_map(v) or is_list(v)) ->
-          {k, coerce(v, nested_k[@to_key], nested_k)}
-
-        nested_k when is_atom(nested_k) and (is_map(v) or is_list(v)) ->
-          {k, coerce(v, nested_k, [])}
-
-        _ ->
-          {k, v}
-      end
-    end
-    |> maybe_struct(nil)
   end
 
   def coerce(from, _, _) do
     from
   end
 
+  defp coerce_key(k, nil), do: k
+  defp coerce_key(k, _to) when is_atom(k), do: k
+
+  defp coerce_key(k, _to) when is_binary(k) do
+    String.to_existing_atom(k)
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp coerce_key(_, _to), do: nil
+
   defp maybe_struct(fields, nil), do: Map.new(fields)
-  defp maybe_struct(fields, to) when is_atom(to), do: struct(to, fields)
+
+  defp maybe_struct(fields, to) when is_atom(to) do
+    struct(to, fields)
+  rescue
+    _e -> Map.new(fields)
+  end
 end

@@ -160,6 +160,38 @@ defmodule Structify.CoerceTest do
                simple: "unchanged"
              } = result
     end
+
+    test "nested struct conversion with string keys" do
+      input = %{"a" => %{"foo" => "hi"}}
+      nested = [a: [__to__: A]]
+
+      assert %B{a: %A{foo: "hi", bar: false}, foo: "bar"} =
+               Coerce.coerce(input, B, nested)
+    end
+
+    test "nested struct conversion with mixed key types" do
+      input = %{"a" => %{:foo => "from_atom", "bar" => true}}
+      nested = [a: [__to__: A]]
+
+      assert %B{a: %A{foo: "from_atom", bar: true}, foo: "bar"} =
+               Coerce.coerce(input, B, nested)
+    end
+
+    test "nested string key references in nested config" do
+      input = %{"a" => %{"foo" => "test"}}
+      nested = [a: [__to__: A]]
+
+      assert %B{a: %A{foo: "test", bar: false}, foo: "bar"} =
+               Coerce.coerce(input, B, nested)
+    end
+
+    test "nested list with string keys in nested config" do
+      input = %{"a" => [%{"foo" => "a"}, %{"foo" => "b"}]}
+      nested = [a: [__to__: A]]
+
+      assert %B{a: [%A{foo: "a", bar: false}, %A{foo: "b", bar: false}], foo: "bar"} =
+               Coerce.coerce(input, B, nested)
+    end
   end
 
   describe "list coercion" do
@@ -246,7 +278,6 @@ defmodule Structify.CoerceTest do
     test "top-level field shorthand" do
       input = %{a: %{foo: "test"}}
 
-      # Test shorthand vs full syntax equivalence
       result_shorthand = Coerce.coerce(input, B, a: A)
       result_full = Coerce.coerce(input, B, a: [__to__: A])
 
@@ -316,9 +347,7 @@ defmodule Structify.CoerceTest do
       }
 
       nested = [
-        # shorthand
         a: A,
-        # full syntax
         nested: [__to__: A]
       ]
 
@@ -354,22 +383,17 @@ defmodule Structify.CoerceTest do
 
     test "shorthand with non-map/list values is ignored" do
       input = %{
-        # string value
         name: "Alice",
-        # integer value
         age: 30
       }
 
       nested = [
-        # This should be ignored since "Alice" is not a map/list
         name: A,
-        # This should be ignored since 30 is not a map/list
         age: A
       ]
 
       result = Coerce.coerce(input, nil, nested)
 
-      # Values should remain unchanged since they're not maps or lists
       assert result == %{name: "Alice", age: 30}
     end
 
@@ -390,6 +414,134 @@ defmodule Structify.CoerceTest do
                item: nil,
                nested: %A{foo: "test", bar: false}
              } = result
+    end
+  end
+
+  describe "string key coercion" do
+    test "map with string keys converts to struct" do
+      input = %{"foo" => "test_value", "bar" => true}
+
+      assert %A{foo: "test_value", bar: true} = Coerce.coerce(input, A)
+    end
+
+    test "map with string keys that don't exist as atoms are filtered out" do
+      non_existing_key = "this_key_definitely_does_not_exist_as_atom_#{System.unique_integer()}"
+      input = %{"foo" => "test_value", non_existing_key => "ignored"}
+
+      assert %A{foo: "test_value", bar: false} = Coerce.coerce(input, A)
+    end
+
+    test "map with mixed atom and string keys" do
+      input = %{:foo => "from_atom", "bar" => true}
+
+      assert %A{foo: "from_atom", bar: true} = Coerce.coerce(input, A)
+    end
+
+    test "map with string keys to map preserves string keys" do
+      input = %{"foo" => "test_value", "bar" => true}
+
+      assert %{"foo" => "test_value", "bar" => true} = Coerce.coerce(input, nil)
+    end
+
+    test "map with mixed atom and string keys to map preserves key types" do
+      input = %{:foo => "from_atom", "bar" => true}
+
+      assert %{:foo => "from_atom", "bar" => true} = Coerce.coerce(input, nil)
+    end
+
+    test "map with non-string, non-atom keys are filtered out when converting to struct" do
+      input = %{
+        "foo" => "string_key",
+        :bar => "atom_key",
+        123 => "integer_key",
+        {:tuple, :key} => "tuple_key"
+      }
+
+      assert %A{foo: "string_key", bar: "atom_key"} = Coerce.coerce(input, A)
+    end
+
+    test "map with non-string, non-atom keys are retained when converting to map" do
+      input = %{
+        "foo" => "string_key",
+        :bar => "atom_key",
+        123 => "integer_key",
+        {:tuple, :key} => "tuple_key"
+      }
+
+      assert %{
+               "foo" => "string_key",
+               :bar => "atom_key",
+               123 => "integer_key",
+               {:tuple, :key} => "tuple_key"
+             } = Coerce.coerce(input, nil)
+    end
+  end
+
+  describe "error domains" do
+    test "invalid target module returns input unchanged" do
+      input = %{foo: "x", bar: true}
+
+      result = Coerce.coerce(input, NonExistentModule)
+      assert result == input
+    end
+
+    test "struct construction failure with invalid module returns input unchanged" do
+      input = %{foo: "value"}
+
+      result = Coerce.coerce(input, String)
+      assert result == input
+    end
+
+    test "nested coercion with invalid module preserves structure" do
+      input = %{nested: %{foo: "value"}}
+      nested = [nested: [__to__: NonExistentModule]]
+
+      result = Coerce.coerce(input, A, nested)
+      assert %A{foo: nil, bar: false} = result
+    end
+
+    test "invalid struct fields are handled gracefully" do
+      input = %{valid_field: "value", invalid_field: "ignored"}
+
+      result = Coerce.coerce(input, A)
+      assert %A{foo: nil, bar: false} = result
+    end
+
+    test "nested error in list processing handles gracefully" do
+      input = [%{foo: "a"}, %{nested: %{foo: "invalid"}}]
+      nested = [nested: [__to__: NonExistentModule]]
+
+      result = Coerce.coerce(input, A, nested)
+      assert [%A{foo: "a", bar: false}, %A{foo: nil, bar: false}] = result
+    end
+
+    test "deeply nested error is handled silently" do
+      input = %{
+        level1: %{
+          level2: %{
+            level3: %{foo: "value"}
+          }
+        }
+      }
+
+      nested = [
+        level1: [
+          level2: [
+            level3: [__to__: NonExistentModule]
+          ]
+        ]
+      ]
+
+      result = Coerce.coerce(input, A, nested)
+      assert %A{foo: nil, bar: false} = result
+    end
+
+    test "error in shorthand module syntax is handled gracefully" do
+      input = %{field: %{foo: "value"}}
+      nested = [field: NonExistentModule]
+
+      result = Coerce.coerce(input, A, nested)
+      assert %A{foo: nil, bar: false} = result
     end
   end
 end

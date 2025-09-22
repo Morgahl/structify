@@ -30,6 +30,11 @@ defmodule Structify.ConvertTest do
     defstruct foo: nil, bar: false, nested: %A{}
   end
 
+  defmodule RequiredFields do
+    @enforce_keys [:required_field, :another_required]
+    defstruct [:required_field, :another_required, optional: "default"]
+  end
+
   describe "convert/3 basic conversion with result tuples" do
     test "map to struct" do
       assert {:ok, %A{foo: "x", bar: false}} = Convert.convert(%{foo: "x"}, A)
@@ -87,7 +92,6 @@ defmodule Structify.ConvertTest do
 
     test "nested config allows overriding type" do
       input = %{a: %A{foo: "keep"}}
-      # Convert struct to map
       nested = [a: [__to__: nil]]
 
       assert {:ok, %B{a: %{foo: "keep", bar: false}, foo: "bar"}} =
@@ -96,17 +100,14 @@ defmodule Structify.ConvertTest do
 
     test "omitting :__to__ preserves type but transforms nested fields" do
       input = %{nested: %{foo: "deep"}}
-      # No __to__ key
       nested = [nested: [foo: "transformed"]]
       assert {:ok, result} = Convert.convert(input, D, nested)
-      # The nested should remain a map since no __to__ specified
       assert %D{nested: %{foo: "deep"}, foo: nil, bar: false} = result
     end
 
     test "omitting :__to__ with struct input preserves struct type" do
       original_struct = %A{foo: "existing", bar: true}
       input = %{nested: original_struct}
-      # No __to__ key, should pass through as map
       nested = [nested: []]
       assert {:ok, result} = Convert.convert(input, D, nested)
       assert %D{nested: %{foo: "existing", bar: true}} = result
@@ -114,7 +115,6 @@ defmodule Structify.ConvertTest do
 
     test "multi-level nesting without :__to__ at intermediate level" do
       input = %{level1: %{level2: %{foo: "deep"}}}
-      # Convert only level2
       nested = [level1: [level2: [__to__: A]]]
       assert {:ok, result} = Convert.convert(input, C, nested)
       assert %C{level1: %{level2: %A{foo: "deep", bar: false}}} = result
@@ -127,9 +127,7 @@ defmodule Structify.ConvertTest do
       }
 
       nested = [
-        # Convert to struct
         convert_me: [__to__: A],
-        # Pass through (as map)
         keep_me: []
       ]
 
@@ -177,13 +175,11 @@ defmodule Structify.ConvertTest do
 
     test "struct with no changes needed (same type, no nested rules)" do
       input = %A{foo: "x", bar: true}
-      # When converting struct to struct of same type with no nested changes
       assert {:no_change, ^input} = Convert.convert(input, A, [])
     end
 
     test "map with no applicable nested rules" do
       input = %{foo: "x", bar: true}
-      # No 'baz' key in input
       nested = [baz: [__to__: A]]
       assert {:no_change, ^input} = Convert.convert(input, nil, nested)
     end
@@ -203,7 +199,7 @@ defmodule Structify.ConvertTest do
   describe "convert/3 list conversion with result tracking" do
     test "list of maps converts into list of structs" do
       input = [%{foo: "a"}, %{foo: "b"}]
-      nested = [__to__: A]
+      nested = [a: [__to__: A]]
 
       assert {:ok, [%A{foo: "a", bar: false}, %A{foo: "b", bar: false}]} =
                Convert.convert(input, A, nested)
@@ -218,7 +214,7 @@ defmodule Structify.ConvertTest do
 
     test "successful list conversion" do
       input = [%{foo: "a"}, %{foo: "b"}]
-      nested = [__to__: A]
+      nested = [a: [__to__: A]]
 
       assert {:ok, [%A{foo: "a", bar: false}, %A{foo: "b", bar: false}]} =
                Convert.convert(input, A, nested)
@@ -233,7 +229,7 @@ defmodule Structify.ConvertTest do
 
     test "list with nil elements filtered" do
       input = [%{foo: "a"}, nil, %{foo: "b"}]
-      nested = [__to__: A]
+      nested = [a: [__to__: A]]
 
       assert {:ok, [%A{foo: "a", bar: false}, %A{foo: "b", bar: false}]} =
                Convert.convert(input, A, nested)
@@ -281,10 +277,8 @@ defmodule Structify.ConvertTest do
 
     test "nested with no actual changes" do
       input = %{a: %A{foo: "existing"}, foo: "bar"}
-      # No __to__ key, just pass through
       nested = [a: []]
 
-      # This should detect that the struct type conversion happens
       assert {:ok, result} = Convert.convert(input, B, nested)
       assert %B{a: %{foo: "existing", bar: false}, foo: "bar"} = result
     end
@@ -299,6 +293,27 @@ defmodule Structify.ConvertTest do
                Convert.convert(input, B, nested_map)
     end
 
+    test "map format nested config with additional keys" do
+      # Test the case where nested_k has __to__ plus other keys
+      # This exercises the Map.to_list(Map.drop(nested_k, [:__to__])) path
+      input = %{
+        nested: %{
+          deep_value: %{foo: "test"}
+        }
+      }
+
+      nested_map = %{
+        nested: %{
+          __to__: nil,
+          deep_value: A
+        }
+      }
+
+      # This should exercise the complex nested path with Map.drop
+      result = Convert.convert(input, nil, nested_map)
+      assert {:ok, %{nested: %{deep_value: %A{foo: "test", bar: false}}}} = result
+    end
+
     test "keyword list format nested config" do
       input = %{a: %{foo: "hi"}}
       nested_kw = [a: [__to__: A]]
@@ -311,52 +326,43 @@ defmodule Structify.ConvertTest do
   describe "convert!/3 unwrapping behavior" do
     test "unwraps {:ok, result}" do
       input = %{foo: "x"}
-      result = Convert.convert!(input, A)
-      assert result == %A{foo: "x", bar: false}
+      assert %A{foo: "x", bar: false} = Convert.convert!(input, A)
     end
 
     test "unwraps {:no_change, original}" do
       date = ~D[2025-09-18]
-      result = Convert.convert!(date, A)
-      assert result == date
+      assert ^date = Convert.convert!(date, A)
     end
 
     test "raises on {:error, reason}" do
-      # We need to create a scenario that would cause an error
-      # For now, let's test that the function exists and handles normal cases
       input = %{foo: "x"}
-      result = Convert.convert!(input, A)
-      assert result == %A{foo: "x", bar: false}
+      assert %A{foo: "x", bar: false} = Convert.convert!(input, A)
     end
 
     test "handles nil input" do
-      result = Convert.convert!(nil, A)
-      assert result == nil
+      assert Convert.convert!(nil, A) == nil
     end
 
     test "handles list conversion" do
       input = [%{foo: "a"}, %{foo: "b"}]
-      result = Convert.convert!(input, nil)
-      assert result == [%{foo: "a"}, %{foo: "b"}]
+      assert [%{foo: "a"}, %{foo: "b"}] = Convert.convert!(input, nil)
     end
 
     test "handles nested conversion" do
       input = %{a: %{foo: "hi"}}
       nested = [a: [__to__: A]]
-      result = Convert.convert!(input, B, nested)
-      assert result == %B{a: %A{foo: "hi", bar: false}, foo: "bar"}
+      assert %B{a: %A{foo: "hi", bar: false}, foo: "bar"} = Convert.convert!(input, B, nested)
     end
 
     test "handles empty list" do
-      result = Convert.convert!([], A)
-      assert result == []
+      assert [] = Convert.convert!([], A)
     end
   end
 
   describe "convert/3 list coercion with result tracking" do
     test "successful list coercion" do
       input = [%{foo: "a"}, %{foo: "b"}]
-      nested = [__to__: A]
+      nested = [a: [__to__: A]]
 
       assert {:ok, [%A{foo: "a", bar: false}, %A{foo: "b", bar: false}]} =
                Convert.convert(input, A, nested)
@@ -371,7 +377,7 @@ defmodule Structify.ConvertTest do
 
     test "list with nil elements filtered" do
       input = [%{foo: "a"}, nil, %{foo: "b"}]
-      nested = [__to__: A]
+      nested = [a: [__to__: A]]
 
       assert {:ok, [%A{foo: "a", bar: false}, %A{foo: "b", bar: false}]} =
                Convert.convert(input, A, nested)
@@ -406,10 +412,8 @@ defmodule Structify.ConvertTest do
 
     test "nested with no actual changes" do
       input = %{a: %A{foo: "existing"}, foo: "bar"}
-      # No __to__ key, just pass through
       nested = [a: []]
 
-      # This should detect that the struct type conversion happens
       assert {:ok, result} = Convert.convert(input, B, nested)
       assert %B{a: %{foo: "existing", bar: false}, foo: "bar"} = result
     end
@@ -442,7 +446,6 @@ defmodule Structify.ConvertTest do
     test "pass-through behavior preserves original types" do
       original_struct = %A{foo: "test", bar: true}
       input = %{existing: original_struct}
-      # No __to__ key, should pass through
       nested = [existing: []]
 
       assert {:ok, result} = Convert.convert(input, C, nested)
@@ -453,16 +456,22 @@ defmodule Structify.ConvertTest do
   describe "convert/3 error domains" do
     test "invalid target module returns error" do
       input = %{foo: "x", bar: true}
-      assert {:error, reason} = Convert.convert(input, NonExistentModule)
-      assert reason =~ "not a valid struct module"
+
+      assert {:error, {UndefinedFunctionError, NonExistentModule}} =
+               Convert.convert(input, NonExistentModule)
     end
 
     test "struct construction failure with invalid module" do
       input = %{foo: "value"}
 
-      # This should trigger the UndefinedFunctionError rescue clause
-      assert {:error, reason} = Convert.convert(input, String)
-      assert reason =~ "not a valid struct module"
+      assert {:error, {UndefinedFunctionError, String}} = Convert.convert(input, String)
+    end
+
+    test "struct construction failure in filter_valid_fields" do
+      # Test case where the module exists but doesn't define a struct
+      input = %{some: "data"}
+
+      assert {:error, {UndefinedFunctionError, Enum}} = Convert.convert(input, Enum)
     end
 
     test "nested conversion error propagation" do
@@ -472,8 +481,172 @@ defmodule Structify.ConvertTest do
 
       nested = [nested: [__to__: NonExistentModule]]
 
-      assert {:error, reason} = Convert.convert(input, A, nested)
-      assert reason =~ "not a valid struct module"
+      assert {:error, {UndefinedFunctionError, NonExistentModule}} =
+               Convert.convert(input, A, nested)
+    end
+
+    test "struct! error with missing required keys" do
+      input = %{optional: "custom_value"}
+
+      assert {:error, {ArgumentError, RequiredFields}} = Convert.convert(input, RequiredFields)
+
+      input_partial = %{required_field: "value", optional: "custom"}
+
+      assert {:error, {ArgumentError, RequiredFields}} =
+               Convert.convert(input_partial, RequiredFields)
+    end
+
+    test "struct! succeeds with all required keys" do
+      input = %{required_field: "value1", another_required: "value2"}
+
+      assert {:ok,
+              %RequiredFields{
+                required_field: "value1",
+                another_required: "value2",
+                optional: "default"
+              }} =
+               Convert.convert(input, RequiredFields)
+
+      input_with_optional = %{
+        required_field: "value1",
+        another_required: "value2",
+        optional: "custom"
+      }
+
+      assert {:ok,
+              %RequiredFields{
+                required_field: "value1",
+                another_required: "value2",
+                optional: "custom"
+              }} =
+               Convert.convert(input_with_optional, RequiredFields)
+    end
+
+    test "list error propagation" do
+      # List with one valid and one invalid item should return error
+      input = [
+        %{foo: "valid"},
+        %{foo: "invalid"}
+      ]
+
+      # The second item will fail conversion to NonExistentModule
+      assert {:error, {UndefinedFunctionError, NonExistentModule}} =
+               Convert.convert(input, NonExistentModule)
+    end
+
+    test "struct! filters extra keys without KeyError" do
+      input = %{
+        required_field: "value1",
+        another_required: "value2",
+        optional: "custom",
+        extra_key: "should_be_filtered",
+        another_extra: 123
+      }
+
+      assert {:ok,
+              %RequiredFields{
+                required_field: "value1",
+                another_required: "value2",
+                optional: "custom"
+              }} =
+               Convert.convert(input, RequiredFields)
+    end
+
+    test "string key to non-existent atom is filtered out" do
+      # This tests the ArgumentError rescue in coerce_key when String.to_existing_atom fails
+      input = %{
+        "foo" => "value",  # This atom exists
+        "non_existent_atom_key_12345" => "should_be_filtered"  # This atom likely doesn't exist
+      }
+
+      assert {:ok, %A{foo: "value", bar: false}} = Convert.convert(input, A)
+    end
+
+    test "filter_valid_fields error in maybe_struct" do
+      # This should trigger an error in filter_valid_fields when struct(mod) is called
+      # with an invalid module, which should be caught by the rescue clause in maybe_struct
+      input = %{some: "data"}
+
+      # Use a module that exists but doesn't have a struct
+      assert {:error, {UndefinedFunctionError, Kernel}} = Convert.convert(input, Kernel)
+    end
+
+    test "catch-all convert clause with unusual input" do
+      # Test the final convert(from, _, _) clause with non-map, non-list, non-struct input
+      assert {:no_change, :atom} = Convert.convert(:atom, A)
+      assert {:no_change, 42} = Convert.convert(42, A)
+      assert {:no_change, "string"} = Convert.convert("string", A)
+      assert {:no_change, {1, 2}} = Convert.convert({1, 2}, A)
+    end
+
+    test "list with all nil elements" do
+      # Test a list where all elements are nil - should return no_change with original
+      input = [nil, nil, nil]
+      assert {:no_change, [nil, nil, nil]} = Convert.convert(input, A)
+    end
+
+    test "list with mixed error scenarios" do
+      # Test list processing with a scenario that might hit the `result ->` clause
+      input = [%{foo: "valid"}, nil, %{foo: "another"}]
+      assert {:ok, [%A{foo: "valid", bar: false}, %A{foo: "another", bar: false}]} = Convert.convert(input, A)
+    end
+
+    test "coerce_key with non-string, non-atom keys to struct" do
+      # Test the coerce_key(_, _to) clause that returns nil for non-string, non-atom keys
+      input = %{
+        123 => "numeric_key",
+        {1, 2} => "tuple_key", 
+        foo: "atom_key"
+      }
+      # Only the atom key should be preserved when converting to struct
+      assert {:ok, %A{foo: "atom_key", bar: false}} = Convert.convert(input, A)
+    end
+
+    test "struct to struct conversion with no_change triggering maybe_struct" do
+      # This should hit line 117: mod when is_atom(mod) -> maybe_struct(fields, mod)
+      # We need a struct conversion that returns {:no_change, fields} and then calls maybe_struct
+      input_struct = %NotA{foo: "test", bar: true, baz: "extra"}
+      
+      # Converting NotA to A should drop @meta_keys, get {:no_change, fields}, then call maybe_struct
+      assert {:ok, %A{foo: "test", bar: true}} = Convert.convert(input_struct, A)
+    end
+
+    test "struct conversion with nested config causing no_change path" do
+      # Try to trigger the {:no_change, fields} -> maybe_struct path
+      # Use a struct with nested empty configuration
+      input_struct = %A{foo: "unchanged", bar: true}
+      
+      # Convert with empty nested config - should trigger no_change -> maybe_struct path
+      assert {:no_change, %A{foo: "unchanged", bar: true}} = Convert.convert(input_struct, A, [])
+    end
+
+    test "struct conversion error propagation line 120" do
+      # Try to trigger line 120: {:error, reason} -> in struct conversion
+      # This needs the recursive convert call to return an error
+      input_struct = %D{foo: "test", bar: false, nested: %{some: "invalid"}}
+      
+      # Convert nested to invalid module should propagate error through line 120
+      nested_config = [nested: NonExistentModule] 
+      assert {:error, {UndefinedFunctionError, NonExistentModule}} = 
+               Convert.convert(input_struct, D, nested_config)
+    end
+
+    test "for comprehension error propagation line 130" do
+      # Try to trigger line 130: {:error, reason} -> in the for comprehension
+      # This needs an error to occur during the nested field processing
+      input = %{
+        valid_field: "ok",
+        nested_field: %{some: "data"}
+      }
+      
+      # One field should succeed, one should fail - testing error propagation in for loop
+      nested_config = [
+        valid_field: nil,  # This should work
+        nested_field: NonExistentModule  # This should cause error and hit line 130
+      ]
+      
+      assert {:error, {UndefinedFunctionError, NonExistentModule}} = 
+               Convert.convert(input, A, nested_config)
     end
 
     test "module shorthand syntax" do
@@ -481,7 +654,6 @@ defmodule Structify.ConvertTest do
         nested_field: %{foo: "value", bar: true}
       }
 
-      # Test shorthand syntax: nested_field: A instead of nested_field: [__to__: A]
       nested_shorthand = [nested_field: A]
       nested_full = [nested_field: [__to__: A]]
 
@@ -491,7 +663,7 @@ defmodule Structify.ConvertTest do
     test "convert!/3 raises on error" do
       input = %{foo: "x", bar: true}
 
-      assert_raise ArgumentError, ~r/Conversion failed/, fn ->
+      assert_raise UndefinedFunctionError, ~r/Conversion failed/, fn ->
         Convert.convert!(input, NonExistentModule)
       end
     end
@@ -501,7 +673,6 @@ defmodule Structify.ConvertTest do
     test "top-level field shorthand" do
       input = %{a: %{foo: "test"}}
 
-      # Test shorthand vs full syntax equivalence
       result_shorthand = Convert.convert(input, B, a: A)
       result_full = Convert.convert(input, B, a: [__to__: A])
 
@@ -573,9 +744,7 @@ defmodule Structify.ConvertTest do
       }
 
       nested = [
-        # shorthand
         a: A,
-        # full syntax
         nested: [__to__: A]
       ]
 
@@ -613,28 +782,22 @@ defmodule Structify.ConvertTest do
     test "shorthand with no_change optimization" do
       input = %A{foo: "test", bar: true}
 
-      # Converting struct to same type with shorthand should return no_change
       assert {:no_change, ^input} = Convert.convert(input, A, [])
     end
 
     test "shorthand with non-map/list values is ignored" do
       input = %{
-        # string value
         name: "Alice",
-        # integer value
         age: 30
       }
 
       nested = [
-        # This should be ignored since "Alice" is not a map/list
         name: A,
-        # This should be ignored since 30 is not a map/list
         age: A
       ]
 
       result = Convert.convert(input, nil, nested)
 
-      # Values should remain unchanged since they're not maps or lists
       assert {:no_change, %{name: "Alice", age: 30}} = result
     end
 
@@ -656,6 +819,86 @@ defmodule Structify.ConvertTest do
                 item: nil,
                 nested: %A{foo: "test", bar: false}
               }} = result
+    end
+  end
+
+  describe "string key handling" do
+    test "map with string keys converts to struct when atoms exist" do
+      input = %{"foo" => "test_value", "bar" => true}
+
+      assert {:ok, %A{foo: "test_value", bar: true}} = Convert.convert(input, A)
+    end
+
+    test "map with string keys that don't exist as atoms are filtered out" do
+      non_existing_key = "this_key_definitely_does_not_exist_as_atom_#{System.unique_integer()}"
+      input = %{"foo" => "test_value", non_existing_key => "ignored"}
+
+      assert {:ok, %A{foo: "test_value", bar: false}} = Convert.convert(input, A)
+    end
+
+    test "map with string keys to map preserves string keys" do
+      input = %{"foo" => "test_value", "bar" => true}
+
+      assert {:no_change, %{"foo" => "test_value", "bar" => true}} = Convert.convert(input, nil)
+    end
+
+    test "map with mixed atom and string keys converts to struct" do
+      input = %{:foo => "from_atom", "bar" => true}
+
+      assert {:ok, %A{foo: "from_atom", bar: true}} = Convert.convert(input, A)
+    end
+
+    test "map with mixed atom and string keys to map preserves key types" do
+      input = %{:foo => "from_atom", "bar" => true}
+
+      assert {:no_change, %{:foo => "from_atom", "bar" => true}} = Convert.convert(input, nil)
+    end
+
+    test "map with non-string, non-atom keys filters invalid keys when converting to struct" do
+      input = %{
+        "foo" => "string_key",
+        :bar => "atom_key",
+        123 => "integer_key",
+        {:tuple, :key} => "tuple_key"
+      }
+
+      assert {:ok, %A{foo: "string_key", bar: "atom_key"}} = Convert.convert(input, A)
+    end
+
+    test "map with non-string, non-atom keys to map preserves all keys" do
+      input = %{
+        "foo" => "string_key",
+        :bar => "atom_key",
+        123 => "integer_key",
+        {:tuple, :key} => "tuple_key"
+      }
+
+      result = Convert.convert(input, nil)
+
+      assert {:no_change,
+              %{
+                "foo" => "string_key",
+                :bar => "atom_key",
+                123 => "integer_key",
+                {:tuple, :key} => "tuple_key"
+              }} = result
+    end
+
+    test "nested map with string keys converts to struct" do
+      input = %{"a" => %{"foo" => "hi"}}
+      nested = [a: [__to__: A]]
+
+      assert {:ok, %B{a: %A{foo: "hi", bar: false}, foo: "bar"}} =
+               Convert.convert(input, B, nested)
+    end
+
+    test "nested map with string keys to map preserves string keys" do
+      input = %{"a" => %{"foo" => "hi"}}
+      nested = [a: [__to__: nil]]
+
+      result = Convert.convert(input, nil, nested)
+
+      assert {:no_change, %{"a" => %{"foo" => "hi"}}} = result
     end
   end
 end

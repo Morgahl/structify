@@ -30,6 +30,15 @@ defmodule Structify.Convert do
     * If `from` is a map and `to` is a module, the result will be a struct of type `to`.
     * If `from` is a map and `to` is `nil`, the result will be a map.
 
+  # String Key Conversion
+
+  When converting maps to structs, string keys are automatically converted to atoms:
+
+    * String keys are converted to atoms using `String.to_existing_atom/1` when targeting structs
+    * If the atom doesn't exist, the key-value pair is filtered out (ignored)
+    * When targeting maps (`to` is `nil`), string keys are preserved as strings
+    * Non-string, non-atom keys are filtered out when targeting structs
+    * Mixed key types are handled gracefully with atom keys taking precedence
 
   The `:no_change` result is returned when:
   - Well-known structs (`Date`, `Time`, `NaiveDateTime`, `DateTime`) are encountered
@@ -40,17 +49,19 @@ defmodule Structify.Convert do
   alias Structify.Constants
   alias Structify.Types
 
-  @to_key :__to__
+  @to_key Constants.to_key()
   @meta_keys Constants.meta_keys()
   @well_known_structs Constants.well_known_structs()
 
-  @type t :: Types.t()
-  @type nested :: Types.nested()
-
   @typedoc """
   Result of conversion operations with explicit success, error, or no-change indication.
+
+  Error format contains the exception module and target module being converted to.
   """
-  @type convert_result :: {:ok, t() | nil} | {:error, term()} | {:no_change, t() | nil}
+  @type convert_result ::
+          {:ok, Types.structifiable() | nil}
+          | {:error, {UndefinedFunctionError, module()}}
+          | {:no_change, Types.structifiable() | nil}
 
   @doc """
   Converts `from` into the type specified by `to`, optionally using `nested` for nested conversion rules.
@@ -58,7 +69,7 @@ defmodule Structify.Convert do
   Returns `{:ok, result}` on successful conversion, `{:error, reason}` on failure,
   or `{:no_change, original}` when optimization determines no change is needed.
   """
-  @spec convert(t() | nil, module() | nil, nested()) :: convert_result()
+  @spec convert(Types.structifiable() | nil, module() | nil, Types.nested()) :: convert_result()
   def convert(from, to \\ nil, nested \\ [])
 
   def convert(from, to, %{} = nested) do
@@ -66,24 +77,26 @@ defmodule Structify.Convert do
   end
 
   def convert([_ | _] = from, to, nested) do
-    try do
-      result =
-        for item <- from, not is_nil(item) do
-          case convert(item, to, nested) do
-            {:ok, coerced} -> coerced
-            {:no_change, original} -> original
-            {:error, reason} -> throw({:error, reason})
-          end
-        end
+    for item <- from, not is_nil(item), reduce: {:no_change, []} do
+      {:error, reason} ->
+        {:error, reason}
 
-      {:ok, result}
-    catch
+      {changed, acc} ->
+        case convert(item, to, nested) do
+          {:ok, coerced} -> {:ok, [coerced | acc]}
+          {:no_change, original} -> {changed, [original | acc]}
+          {:error, reason} -> {:error, reason}
+        end
+    end
+    |> case do
+      {:ok, list} -> {:ok, Enum.reverse(list)}
+      {:no_change, _} -> {:no_change, from}
       {:error, reason} -> {:error, reason}
     end
   end
 
-  def convert([], _, _) do
-    {:no_change, []}
+  def convert(%{__struct__: to} = from, to, []) do
+    {:no_change, from}
   end
 
   def convert(%{__struct__: struct} = from, _, _) when struct in @well_known_structs do
@@ -91,134 +104,65 @@ defmodule Structify.Convert do
   end
 
   def convert(%_{} = from, to, nested) do
-    if is_struct_of_type(from, to) and nested == [] do
-      {:no_change, from}
-    else
-      case convert(Map.drop(from, @meta_keys), to, nested) do
-        {:ok, result} -> {:ok, result}
-        {:no_change, _} when not is_nil(to) -> {:no_change, from}
-        {:no_change, map_result} when is_nil(to) -> {:ok, map_result}
-        {:error, reason} -> {:error, reason}
-      end
+    from
+    |> Map.drop(@meta_keys)
+    |> convert(to, nested)
+    |> case do
+      {:ok, result} ->
+        {:ok, result}
+
+      {:no_change, fields} ->
+        case to do
+          nil -> {:ok, Map.drop(from, @meta_keys)}
+          mod when is_atom(mod) -> maybe_struct(fields, mod)
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
-  def convert(%{} = from, to, nested) when is_atom(to) and not is_nil(to) and is_list(nested) do
-    if is_struct_of_type(from, to) and nested == [] do
-      {:no_change, from}
-    else
-      has_applicable_nested_rules =
-        nested != [] and Enum.any?(nested, fn {k, _} -> k != @to_key and is_map_key(from, k) end)
+  def convert(%{} = from, to, nested) when is_list(nested) do
+    for {k, v} <- from,
+        atom_k = coerce_key(k, to),
+        atom_k not in @meta_keys,
+        reduce: {:no_change, []} do
+      {:error, reason} ->
+        {:error, reason}
 
-      struct_conversion_needed = not is_struct_of_type(from, to)
+      {changed, acc} ->
+        output_key = if to == nil, do: k, else: atom_k
+        lookup_key = if is_atom(atom_k), do: atom_k, else: nil
 
-      if not struct_conversion_needed and not has_applicable_nested_rules do
-        {:no_change, from}
-      else
-        try do
-          {changes_made, fields} =
-            for {k, v} <- from, k not in @meta_keys, reduce: {false, []} do
-              {changed_so_far, acc} ->
-                case nested[k] do
-                  nil ->
-                    {changed_so_far, [{k, v} | acc]}
+        case nested[lookup_key] do
+          nested_k when is_list(nested_k) ->
+            convert(v, nested_k[@to_key], nested_k)
 
-                  nested_k
-                  when (is_list(nested_k) or is_map(nested_k)) and (is_map(v) or is_list(v)) ->
-                    nested_to = get_to_key(nested_k)
+          %{__to__: to_module} = nested_k ->
+            convert(v, to_module, Map.to_list(Map.drop(nested_k, [:__to__])))
 
-                    case convert(v, nested_to, nested_k) do
-                      {:ok, coerced} -> {true, [{k, coerced} | acc]}
-                      {:no_change, original} -> {changed_so_far, [{k, original} | acc]}
-                      {:error, reason} -> throw({:error, reason})
-                    end
-
-                  nested_k when is_atom(nested_k) and (is_map(v) or is_list(v)) ->
-                    case convert(v, nested_k, []) do
-                      {:ok, coerced} -> {true, [{k, coerced} | acc]}
-                      {:no_change, original} -> {changed_so_far, [{k, original} | acc]}
-                      {:error, reason} -> throw({:error, reason})
-                    end
-
-                  _ ->
-                    {changed_so_far, [{k, v} | acc]}
-                end
-            end
-
-          if changes_made or struct_conversion_needed do
-            case maybe_struct(Enum.reverse(fields), to) do
-              {:ok, final_result} -> {:ok, final_result}
-              {:error, reason} -> {:error, reason}
-            end
-          else
-            {:no_change, from}
-          end
-        catch
+          nested_k ->
+            convert(v, nested_k, [])
+        end
+        |> case do
+          {:ok, coerced} -> {:ok, [{output_key, coerced} | acc]}
+          {:no_change, original} -> {changed, [{output_key, original} | acc]}
           {:error, reason} -> {:error, reason}
         end
-      end
     end
-  end
+    |> case do
+      {:ok, fields} ->
+        maybe_struct(fields, to)
 
-  def convert(%{} = from, nil, nested) when is_list(nested) do
-    if nested == [] do
-      {:no_change, from}
-    else
-      applicable_keys = Enum.any?(nested, fn {k, _} -> k != @to_key and is_map_key(from, k) end)
-
-      if not applicable_keys do
-        {:no_change, from}
-      else
-        try do
-          {changes_made, fields} =
-            for {k, v} <- from, k not in @meta_keys, reduce: {false, []} do
-              {changed_so_far, acc} ->
-                case nested[k] do
-                  nil ->
-                    {changed_so_far, [{k, v} | acc]}
-
-                  nested_k
-                  when (is_list(nested_k) or is_map(nested_k)) and (is_map(v) or is_list(v)) ->
-                    nested_to = get_to_key(nested_k)
-
-                    case convert(v, nested_to, nested_k) do
-                      {:ok, coerced} -> {true, [{k, coerced} | acc]}
-                      {:no_change, original} -> {changed_so_far, [{k, original} | acc]}
-                      {:error, reason} -> throw({:error, reason})
-                    end
-
-                  nested_k when is_atom(nested_k) and (is_map(v) or is_list(v)) ->
-                    case convert(v, nested_k, []) do
-                      {:ok, coerced} -> {true, [{k, coerced} | acc]}
-                      {:no_change, original} -> {changed_so_far, [{k, original} | acc]}
-                      {:error, reason} -> throw({:error, reason})
-                    end
-
-                  _ ->
-                    {changed_so_far, [{k, v} | acc]}
-                end
-            end
-
-          final_result = Map.new(Enum.reverse(fields))
-
-          if changes_made do
-            {:ok, final_result}
-          else
-            {:no_change, from}
-          end
-        catch
-          {:error, reason} -> {:error, reason}
+      {:no_change, fields} ->
+        case to do
+          nil -> {:no_change, from}
+          mod when is_atom(mod) -> maybe_struct(fields, mod)
         end
-      end
+
+      result ->
+        result
     end
-  end
-
-  def convert(nil, _, _) do
-    {:no_change, nil}
-  end
-
-  def convert(from, nil, []) do
-    {:no_change, from}
   end
 
   def convert(from, _, _) do
@@ -230,38 +174,44 @@ defmodule Structify.Convert do
 
   Raises an exception on error, returns the result directly on success or no-change.
   """
-  @spec convert!(t() | nil, module() | nil, nested()) :: t() | nil
+  @spec convert!(Types.structifiable() | nil, module() | nil, Types.nested()) ::
+          Types.structifiable() | nil
   def convert!(from, to \\ nil, nested \\ []) do
     case convert(from, to, nested) do
       {:ok, result} -> result
       {:no_change, original} -> original
-      {:error, reason} -> raise ArgumentError, "Conversion failed: #{inspect(reason)}"
+      {:error, {kind, reason}} -> raise kind, "Conversion failed: #{inspect(reason)}"
     end
   end
 
-  defp maybe_struct(fields, nil), do: {:ok, Map.new(fields)}
+  defp coerce_key(k, nil), do: k
+  defp coerce_key(k, _to) when is_atom(k), do: k
 
-  defp maybe_struct(fields, to) when is_atom(to) do
+  defp coerce_key(k, _to) when is_binary(k) do
     try do
-      {:ok, struct(to, fields)}
+      String.to_existing_atom(k)
     rescue
-      e in ArgumentError ->
-        {:error, "Failed to create struct #{inspect(to)}: #{Exception.message(e)}"}
-
-      _e in UndefinedFunctionError ->
-        {:error, "Target type #{inspect(to)} is not a valid struct module"}
-
-      e ->
-        {:error, "Unexpected error creating struct #{inspect(to)}: #{Exception.message(e)}"}
+      ArgumentError -> nil
     end
   end
 
-  defp is_struct_of_type(value, module) when is_struct(value) do
-    value.__struct__ == module
+  defp coerce_key(_, _to), do: nil
+
+  defp maybe_struct(fields, to) do
+    case to do
+      nil ->
+        {:ok, Map.new(fields)}
+
+      mod ->
+        valid_fields = filter_valid_fields(fields, mod)
+        {:ok, struct!(mod, valid_fields)}
+    end
+  rescue
+    e -> {:error, {e.__struct__, to}}
   end
 
-  defp is_struct_of_type(_, _), do: false
-
-  defp get_to_key(nested) when is_list(nested), do: nested[@to_key]
-  defp get_to_key(nested) when is_map(nested), do: Map.get(nested, @to_key)
+  defp filter_valid_fields(fields, mod) do
+    struct_keys = Map.keys(struct(mod))
+    Enum.filter(fields, fn {key, _value} -> key in struct_keys end)
+  end
 end
