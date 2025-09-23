@@ -1,7 +1,7 @@
 defmodule Structify.Coerce do
   @moduledoc """
   Structify.Coerce provides `coerce/3` a utility to coerce maps, structs, lists of maps/structs into structs, maps, or
-  lists of structs/maps, respectively... recursively.
+  lists of structs/maps, respectively... recursively, skipping known structs.
 
   # 1:1 Coercions
 

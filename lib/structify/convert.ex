@@ -9,8 +9,6 @@ defmodule Structify.Convert do
 
   The `convert!/3` function unwraps the result tuples and raises on error.
 
-
-
   Struct-to-struct conversions handle deeply nested sets with specific error domains for:
 
   - **Inner Join**: Fields present in both source and target - successful conversion
@@ -20,7 +18,6 @@ defmodule Structify.Convert do
   - **Intersection Failures**: Type mismatches, invalid modules, constraint violations
 
   The `{:error, reason}` tuple provides context for which intersection operation failed.
-
 
     * If `to` is `nil`, the result will be a map.
     * If `from` is `nil`, the result will be `{:no_change, nil}`.

@@ -65,4 +65,11 @@ defmodule Structify do
   See `Structify.Convert` module documentation for details.
   """
   defdelegate convert!(from, to \\ nil, nested \\ []), to: Structify.Convert
+
+  @doc """
+  Deeply removes structures from `from`, skipping known structs.
+
+  See `Structify.Destruct` module documentation for details.
+  """
+  defdelegate destruct(from), to: Structify.Destruct
 end
