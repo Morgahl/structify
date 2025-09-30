@@ -2,6 +2,24 @@
 
 Structify is an Elixir library that provides powerful functionality to coerce between maps, structs, and lists recursively.
 
+[![Hex.pm](https://img.shields.io/hexpm/v/structify.svg)](https://hex.pm/packages/structify) [![Documentation](https://img.shields.io/badge/documentation-gray)](https://hexdocs.pm/structify)
+
+## Installation
+
+Add `structify` to your list of dependencies in `mix.exs`:
+
+```elixir
+def deps do
+  [
+    {:structify, "~> 0.1.0"}
+  ]
+end
+```
+
+## Documentation
+
+The docs can be found at <https://hexdocs.pm/structify>.
+
 ## Features
 
 ### Conversion and cleanup approaches
@@ -34,22 +52,6 @@ Structify is an Elixir library that provides powerful functionality to coerce be
 - **Well-known Type Preservation**: Date, Time, NaiveDateTime, DateTime pass through unchanged
 - **List Processing**: Automatic filtering of nil values
 - **Pass-through Behavior**: Transform nested fields while preserving intermediate types
-
-## Installation
-
-Add `structify` to your list of dependencies in `mix.exs`:
-
-```elixir
-def deps do
-  [
-    {:structify, "~> 0.1.0"}
-  ]
-end
-```
-
-## Documentation
-
-The docs can be found at <https://hexdocs.pm/structify>.
 
 ## Quick Start
 
