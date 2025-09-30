@@ -179,8 +179,9 @@ defmodule Structify.Coerce do
   defp maybe_struct(fields, nil), do: Map.new(fields)
 
   defp maybe_struct(fields, to) when is_atom(to) do
-    struct(to, fields)
-  rescue
-    _e -> Map.new(fields)
+    case function_exported?(to, :__struct__, 1) do
+      true -> struct(to, fields)
+      false -> Map.new(fields)
+    end
   end
 end
