@@ -1,18 +1,23 @@
 defmodule Structify.MixProject do
   use Mix.Project
 
+  @app_name :structify
+  @version "0.1.0"
+  @scm_url "https://github.com/Morgahl/structify"
+  @homepage_url "https://hexdocs.pm/structify"
+
   def project do
     [
-      app: :structify,
-      version: "0.1.0",
+      app: @app_name,
+      version: @version,
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
+      description: description(),
+      package: package(),
       deps: deps(),
-
-      # Docs
       name: "Structify",
-      source_url: "https://github.com/Morgahl/structify",
-      homepage_url: "https://hexdocs.pm/structify",
+      source_url: @scm_url,
+      homepage_url: @homepage_url,
       docs: docs()
     ]
   end
@@ -31,10 +36,32 @@ defmodule Structify.MixProject do
     ]
   end
 
+  defp description() do
+    "An Elixir library for working with structs and maps conveniently."
+  end
+
   defp docs do
     [
       main: "Structify",
-      extras: ["README.md"]
+      extras: ["README.md"],
+      main: "readme"
+    ]
+  end
+
+  defp package() do
+    [
+      files: [
+        "lib",
+        ".formatter.exs",
+        "README*",
+        "LICENSE*",
+        "mix.exs"
+      ],
+      maintainers: ["Marc Hayes"],
+      licenses: ["MIT"],
+      links: %{
+        "GitHub" => @scm_url
+      }
     ]
   end
 end
