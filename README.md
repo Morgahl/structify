@@ -4,7 +4,7 @@ Structify is an Elixir library that provides powerful functionality to coerce be
 
 ## Features
 
-### Two Conversion Approaches
+### Conversion and cleanup approaches
 
 **Structify.Coerce** - Lossy conversions with simple return values:
 
@@ -17,6 +17,13 @@ Structify is an Elixir library that provides powerful functionality to coerce be
 - Returns `{:ok, result}`, `{:error, reason}`, or `{:no_change, original}`
 - Comprehensive error domains for debugging
 - Ideal for untrusted input or when detailed error information is needed
+
+**Structify.Destruct** - Deep cleanup and meta removal:
+
+- Removes internal/meta keys such as `:__struct__` and `:__meta__` from maps and structs
+- Recursively processes lists, maps, and structs; filters `nil` entries from lists
+- Preserves well-known date/time structs (Date, Time, NaiveDateTime, DateTime)
+- Useful for preparing data for JSON serialization or for callers that expect plain maps
 
 ### Core Capabilities
 
@@ -39,6 +46,10 @@ def deps do
   ]
 end
 ```
+
+## Documentation
+
+The docs can be found at <https://hexdocs.pm/structify>.
 
 ## Quick Start
 
@@ -229,6 +240,53 @@ iex> Structify.convert(date, nil)
 {:no_change, ~D[2023-09-18]}
 ```
 
+## Destruct (deep cleanup)
+
+`Structify.destruct/1` deeply cleans data structures by removing internal/meta keys and
+recursively processing lists, maps, and structs while preserving common date/time structs.
+
+### Behavior and rules
+
+- Lists: each non-nil element is destructed recursively; `nil` elements are filtered out.
+- Maps and structs: all values are destructed recursively. Meta keys such as
+  `:__struct__` and `:__meta__` are removed from maps/structs during the cleanup.
+- Well-known structs (Date, Time, NaiveDateTime, DateTime) are returned unchanged.
+- Other primitive values (numbers, strings, atoms, etc.) are returned as-is.
+
+This is useful when you want to prepare data for JSON serialization or for returning
+plain maps from code that may produce structs with attached metadata.
+
+### Examples
+
+```elixir
+iex> Structify.destruct(Map.put(%User{name: "Alice", email: "alice@example.com"}, :__meta__, :foo))
+%{name: "Alice", email: "alice@example.com", age: nil}
+
+iex> Structify.destruct([%User{name: "Alice"}, nil, 1])
+[%{name: "Alice", email: nil, age: nil}, 1]
+
+iex> Structify.destruct(%{"foo" => 1, :bar => 2, __meta__: :skip})
+%{"foo" => 1, :bar => 2}
+
+iex> Structify.destruct(~D[2020-01-01])
+~D[2020-01-01]
+
+iex> Structify.destruct(%{user: Map.put(%User{name: "Alice"}, :__meta__, :foo)})
+%{user: %{name: "Alice", email: nil, age: nil}}
+
+iex> Structify.destruct(nil)
+nil
+```
+
+### API
+
+```elixir
+@spec destruct(term()) :: term()
+```
+
+Removes meta keys and returns a deeply cleaned structure suitable for serialization or
+for consumers that expect plain maps/lists rather than structs with metadata.
+
 ## API Reference
 
 ### Structify.coerce/3
@@ -255,9 +313,3 @@ Performs lossless conversion with explicit result tuples.
 ```
 
 Like `convert/3` but raises the appropriate exception on error, returns result directly on success.
-
-## Documentation
-
-Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)
-and published on [HexDocs](https://hexdocs.pm). Once published, the docs can
-be found at <https://hexdocs.pm/structify>.
