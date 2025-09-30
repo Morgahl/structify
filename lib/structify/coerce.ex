@@ -1,7 +1,7 @@
 defmodule Structify.Coerce do
   @moduledoc """
   Structify.Coerce provides `coerce/3` a utility to coerce maps, structs, lists of maps/structs into structs, maps, or
-  lists of structs/maps, respectively... recursively.
+  lists of structs/maps, respectively... recursively, skipping known structs.
 
   # 1:1 Coercions
 
@@ -179,8 +179,9 @@ defmodule Structify.Coerce do
   defp maybe_struct(fields, nil), do: Map.new(fields)
 
   defp maybe_struct(fields, to) when is_atom(to) do
-    struct(to, fields)
-  rescue
-    _e -> Map.new(fields)
+    case function_exported?(to, :__struct__, 1) do
+      true -> struct(to, fields)
+      false -> Map.new(fields)
+    end
   end
 end

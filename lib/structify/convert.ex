@@ -9,8 +9,6 @@ defmodule Structify.Convert do
 
   The `convert!/3` function unwraps the result tuples and raises on error.
 
-
-
   Struct-to-struct conversions handle deeply nested sets with specific error domains for:
 
   - **Inner Join**: Fields present in both source and target - successful conversion
@@ -20,7 +18,6 @@ defmodule Structify.Convert do
   - **Intersection Failures**: Type mismatches, invalid modules, constraint violations
 
   The `{:error, reason}` tuple provides context for which intersection operation failed.
-
 
     * If `to` is `nil`, the result will be a map.
     * If `from` is `nil`, the result will be `{:no_change, nil}`.
@@ -45,6 +42,47 @@ defmodule Structify.Convert do
   - No actual transformations would occur (same type, no nested changes)
   - Input is `nil` and no conversion rules apply
   - Input matches the target type and no nested transformations are needed
+
+  ## Examples
+
+      iex> input = %{name: "Alice", email: "alice@example.com", age: 30}
+      iex> Convert.convert(input, User)
+      {:ok, %User{name: "Alice", email: "alice@example.com", age: 30}}
+
+      iex> input = %{name: "Alice", email: "alice@example.com", age: 30}
+      iex> Convert.convert([input, nil], User)
+      {:ok, [%User{name: "Alice", email: "alice@example.com", age: 30}]}
+
+      iex> Convert.convert(%{"name" => "Alice", "age" => 30}, User)
+      {:ok, %User{name: "Alice", age: 30}}
+
+      iex> Convert.convert(%{name: "Alice", extra: 1}, User)
+      {:ok, %User{name: "Alice"}}
+
+      iex> Convert.convert(%User{name: "Alice"}, User)
+      {:no_change, %User{name: "Alice"}}
+
+      iex> Convert.convert(nil, User)
+      {:no_change, nil}
+
+      iex> Convert.convert(%{name: "Alice"}, nil)
+      {:no_change, %{name: "Alice"}}
+
+      iex> Convert.convert(%{"name" => "Alice"}, nil)
+      {:no_change, %{"name" => "Alice"}}
+
+      iex> Convert.convert(%{user: %{name: "Alice"}}, nil, [user: User])
+      {:ok, %{user: %User{name: "Alice"}}}
+
+      iex> Convert.convert(%{user: %{name: "Alice"}}, nil, [user: [__to__: User]])
+      {:ok, %{user: %User{name: "Alice"}}}
+
+      iex> Convert.convert(%{user: %{name: "Alice"}}, nil, [user: [__to__: nil]])
+      {:no_change, %{user: %{name: "Alice"}}}
+
+      iex> Convert.convert(%{user: %{name: "Alice", nested_field: %{}}}, nil, [user: [nested_field: [__to__: User]]])
+      {:ok, %{user: %{name: "Alice", nested_field: %User{}}}}
+
   """
   alias Structify.Constants
   alias Structify.Types
@@ -60,8 +98,8 @@ defmodule Structify.Convert do
   """
   @type convert_result ::
           {:ok, Types.structifiable() | nil}
-          | {:error, {UndefinedFunctionError, module()}}
           | {:no_change, Types.structifiable() | nil}
+          | {:error, {module(), :not_struct | String.t()}}
 
   @doc """
   Converts `from` into the type specified by `to`, optionally using `nested` for nested conversion rules.
@@ -180,7 +218,8 @@ defmodule Structify.Convert do
     case convert(from, to, nested) do
       {:ok, result} -> result
       {:no_change, original} -> original
-      {:error, {kind, reason}} -> raise kind, "Conversion failed: #{inspect(reason)}"
+      {:error, {mod, :not_struct}} -> raise ArgumentError, "#{inspect(mod)} is not a struct"
+      {:error, {_mod, msg}} -> raise ArgumentError, msg
     end
   end
 
@@ -197,21 +236,22 @@ defmodule Structify.Convert do
 
   defp coerce_key(_, _to), do: nil
 
-  defp maybe_struct(fields, to) do
-    case to do
-      nil ->
-        {:ok, Map.new(fields)}
+  defp maybe_struct(fields, nil), do: {:ok, Map.new(fields)}
 
-      mod ->
-        valid_fields = filter_valid_fields(fields, mod)
-        {:ok, struct!(mod, valid_fields)}
+  defp maybe_struct(fields, to) do
+    case function_exported?(to, :__struct__, 1) do
+      true -> {:ok, struct!(to, filter_valid_fields(fields, to))}
+      false -> {:error, {to, :not_struct}}
     end
   rescue
-    e -> {:error, {e.__struct__, to}}
+    e in ArgumentError -> {:error, {to, e.message}}
   end
 
   defp filter_valid_fields(fields, mod) do
     struct_keys = Map.keys(struct(mod))
-    Enum.filter(fields, fn {key, _value} -> key in struct_keys end)
+
+    for {key, value} <- fields,
+        key in struct_keys,
+        do: {key, value}
   end
 end

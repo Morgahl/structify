@@ -7,11 +7,13 @@ Structify is an Elixir library that provides powerful functionality to coerce be
 ### Two Conversion Approaches
 
 **Structify.Coerce** - Lossy conversions with simple return values:
+
 - Direct results
 - Optimized for performance when error handling isn't critical
 - Ideal for trusted data transformations
 
 **Structify.Convert** - Lossless conversions with explicit result tuples:
+
 - Returns `{:ok, result}`, `{:error, reason}`, or `{:no_change, original}`
 - Comprehensive error domains for debugging
 - Ideal for untrusted input or when detailed error information is needed
@@ -162,7 +164,7 @@ result = Structify.coerce(input, nil, nested)
 ```elixir
 # Convert provides detailed error information
 iex> Structify.convert(%{invalid: "data"}, NonExistentModule)
-{:error, {UndefinedFunctionError, NonExistentModule}}
+{:error, {NonExistentModule, :not_struct}}
 
 # No-change optimization
 iex> user = %User{name: "Alice", email: "alice@example.com", age: 30}
@@ -174,7 +176,7 @@ iex> Structify.convert!(%{name: "Alice"}, User)
 %User{name: "Alice", email: nil, age: nil}
 
 iex> Structify.convert!(%{invalid: "data"}, NonExistentModule)
-** (UndefinedFunctionError) Conversion failed: NonExistentModule
+** (ArgumentError) NonExistentModule is not a struct
 ```
 
 ## Configuration Options
@@ -259,4 +261,3 @@ Like `convert/3` but raises the appropriate exception on error, returns result d
 Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)
 and published on [HexDocs](https://hexdocs.pm). Once published, the docs can
 be found at <https://hexdocs.pm/structify>.
-
