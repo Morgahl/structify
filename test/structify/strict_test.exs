@@ -648,70 +648,169 @@ defmodule Structify.StrictTest do
     end
   end
 
-  describe "__skip__" do
-    test "skips matching struct at current level" do
-      input = %A{foo: "keep", bar: true}
-      nested = [__skip__: [A]]
+  describe "__skip__ and __skip_recursive__" do
+    # -- __skip__: current level only --
 
-      assert {:ok, %A{foo: "keep", bar: true}} = Strict.strict(input, nil, nested)
+    test "skip preserves matching struct when converting to map" do
+      assert {:ok, %A{foo: "keep", bar: true}} = Strict.strict(%A{foo: "keep", bar: true}, nil, __skip__: [A])
     end
 
-    test "does not skip non-matching struct" do
-      input = %NotA{foo: "x", bar: true, baz: "extra"}
-      nested = [__skip__: [A]]
-
-      assert {:ok, %{foo: "x", bar: true, baz: "extra"}} = Strict.strict(input, nil, nested)
+    test "skip does not affect non-matching struct types" do
+      assert {:ok, %{foo: "x", bar: true, baz: "extra"}} =
+               Strict.strict(%NotA{foo: "x", bar: true, baz: "extra"}, nil, __skip__: [A])
     end
 
-    test "does not propagate to deeper levels" do
+    test "skip does NOT propagate — nested structs still convert" do
       input = %{nested: %A{foo: "deep", bar: true}}
-      nested = [__skip__: [A], nested: [__to__: nil]]
 
-      assert {:ok, %{nested: %{foo: "deep", bar: true}}} = Strict.strict(input, nil, nested)
+      assert {:ok, %{nested: %{foo: "deep", bar: true}}} =
+               Strict.strict(input, nil, __skip__: [A], nested: [__to__: nil])
     end
 
-    test "skips struct inside map field iteration" do
+    test "skip inside field-level nested config" do
       input = %{a: %A{foo: "skip_me", bar: true}, foo: "bar"}
-      nested = [a: [__to__: nil, __skip__: [A]]]
 
-      assert {:ok, %B{a: %A{foo: "skip_me", bar: true}, foo: "bar"}} = Strict.strict(input, B, nested)
-    end
-  end
-
-  describe "__skip_recursive__" do
-    test "skips matching struct at current level" do
-      input = %A{foo: "keep", bar: true}
-      nested = [__skip_recursive__: [A]]
-
-      assert {:ok, %A{foo: "keep", bar: true}} = Strict.strict(input, nil, nested)
+      assert {:ok, %B{a: %A{foo: "skip_me", bar: true}, foo: "bar"}} =
+               Strict.strict(input, B, a: [__to__: nil, __skip__: [A]])
     end
 
-    test "propagates to deeper levels" do
+    # -- __skip_recursive__: all levels --
+
+    test "skip_recursive preserves matching struct at top level" do
+      assert {:ok, %A{foo: "keep"}} = Strict.strict(%A{foo: "keep"}, nil, __skip_recursive__: [A])
+    end
+
+    test "skip_recursive propagates to nested fields" do
       input = %{nested: %A{foo: "deep", bar: true}}
-      nested = [__skip_recursive__: [A], nested: [__to__: nil]]
 
-      assert {:ok, %{nested: %A{foo: "deep", bar: true}}} = Strict.strict(input, nil, nested)
+      assert {:ok, %{nested: %A{foo: "deep", bar: true}}} =
+               Strict.strict(input, nil, __skip_recursive__: [A], nested: [__to__: nil])
     end
 
-    test "propagates through multiple levels" do
-      input = %{level1: %{a: %A{foo: "deep", bar: true}}}
-      nested = [__skip_recursive__: [A], level1: [a: [__to__: nil]]]
-
-      assert {:ok, %{level1: %{a: %A{foo: "deep", bar: true}}}} = Strict.strict(input, nil, nested)
+    test "skip_recursive propagates through 3+ levels" do
+      input = %{l1: %{l2: %{l3: %A{foo: "deep"}}}}
+      nested = [__skip_recursive__: [A], l1: [l2: [l3: [__to__: nil]]]]
+      assert {:ok, %{l1: %{l2: %{l3: %A{foo: "deep"}}}}} = Strict.strict(input, nil, nested)
     end
 
-    test "skips in lists" do
-      input = %{items: [%A{foo: "a", bar: true}, %A{foo: "b", bar: false}]}
-      nested = [__skip_recursive__: [A], items: [__to__: nil]]
+    test "skip_recursive preserves structs inside lists" do
+      input = %{items: [%A{foo: "a"}, %A{foo: "b"}]}
 
-      assert {:ok, %{items: [%A{foo: "a", bar: true}, %A{foo: "b", bar: false}]}} =
+      assert {:ok, %{items: [%A{foo: "a"}, %A{foo: "b"}]}} =
+               Strict.strict(input, nil, __skip_recursive__: [A], items: [__to__: nil])
+    end
+
+    test "skip_recursive with top-level list" do
+      input = [%A{foo: "a"}, %A{foo: "b"}]
+
+      assert {:ok, [%A{foo: "a"}, %A{foo: "b"}]} =
+               Strict.strict(input, nil, __skip_recursive__: [A])
+    end
+
+    # -- multiple modules in skip list --
+
+    test "multiple modules in skip list" do
+      assert {:ok, %A{foo: "a"}} = Strict.strict(%A{foo: "a"}, nil, __skip__: [A, NotA])
+      assert {:ok, %NotA{baz: "x"}} = Strict.strict(%NotA{baz: "x"}, nil, __skip__: [A, NotA])
+    end
+
+    test "multiple modules in skip_recursive list" do
+      input = %{a: %A{foo: "a"}, nota: %NotA{baz: "x"}}
+      nested = [__skip_recursive__: [A, NotA], a: [__to__: nil], nota: [__to__: nil]]
+      assert {:ok, %{a: %A{foo: "a"}, nota: %NotA{baz: "x"}}} = Strict.strict(input, nil, nested)
+    end
+
+    # -- skip some, convert others --
+
+    test "skip one struct type while converting another in same map" do
+      input = %{keep: %A{foo: "preserve"}, convert: %NotA{baz: "drop_struct"}}
+      nested = [__skip_recursive__: [A], keep: [__to__: nil], convert: [__to__: nil]]
+      assert {:ok, result} = Strict.strict(input, nil, nested)
+      assert %{keep: %A{foo: "preserve"}, convert: %{baz: "drop_struct"}} = result
+    end
+
+    # -- skip + struct-to-struct conversion --
+
+    test "skip prevents struct-to-struct conversion" do
+      input = %NotA{foo: "x", bar: true, baz: "keep"}
+
+      assert {:ok, %NotA{foo: "x", bar: true, baz: "keep"}} =
+               Strict.strict(input, A, __skip__: [NotA])
+    end
+
+    test "skip struct that is the same as target type" do
+      input = %A{foo: "same", bar: true}
+      assert {:ok, %A{foo: "same", bar: true}} = Strict.strict(input, A, __skip__: [A])
+    end
+
+    # -- skip bypasses strict validation --
+
+    test "skip bypasses unknown_keys validation for skipped struct" do
+      # NotA has :baz which isn't in A — normally strict would error with unknown_keys
+      # but skip should prevent the conversion entirely
+      input = %NotA{foo: "x", bar: true, baz: "extra_field"}
+
+      assert {:ok, %NotA{foo: "x", bar: true, baz: "extra_field"}} =
+               Strict.strict(input, A, __skip__: [NotA])
+    end
+
+    # -- skip + module shorthand --
+
+    test "skip_recursive works alongside module shorthand syntax" do
+      input = %{a: %{foo: "convert"}, nota: %NotA{baz: "keep"}}
+      nested = [__skip_recursive__: [NotA], a: A, nota: [__to__: nil]]
+
+      assert {:ok, %{a: %A{foo: "convert", bar: false}, nota: %NotA{baz: "keep"}}} =
                Strict.strict(input, nil, nested)
     end
 
-    test "no skip config results in normal behavior" do
-      input = %A{foo: "x", bar: true}
+    # -- both __skip__ and __skip_recursive__ combined --
 
-      assert {:ok, %{foo: "x", bar: true}} = Strict.strict(input, nil)
+    test "skip and skip_recursive can coexist" do
+      input = %{a: %A{foo: "local"}, nota: %NotA{baz: "x"}, nested: %{deep: %A{foo: "deep"}}}
+
+      nested = [
+        __skip__: [A],
+        __skip_recursive__: [NotA],
+        a: [__to__: nil],
+        nota: [__to__: nil],
+        nested: [deep: [__to__: nil]]
+      ]
+
+      assert {:ok, result} = Strict.strict(input, nil, nested)
+      # __skip__ only affects top-level struct input, not struct values in map fields
+      # __skip_recursive__ propagates to all children — NotA stays everywhere
+      assert %{a: %{foo: "local", bar: false}, nota: %NotA{baz: "x"}, nested: %{deep: %{foo: "deep"}}} = result
+    end
+
+    # -- map format nested config --
+
+    test "skip works with map format nested config" do
+      input = %A{foo: "keep", bar: true}
+      assert {:ok, %A{foo: "keep", bar: true}} = Strict.strict(input, nil, %{__skip__: [A]})
+    end
+
+    # -- edge cases --
+
+    test "empty skip list is a no-op" do
+      assert {:ok, %{foo: "x", bar: true}} = Strict.strict(%A{foo: "x", bar: true}, nil, __skip__: [])
+    end
+
+    test "nil values in data are unaffected by skip" do
+      input = %{a: nil, b: %A{foo: "skip"}}
+      nested = [__skip_recursive__: [A], a: A, b: [__to__: nil]]
+      assert {:ok, %{a: nil, b: %A{foo: "skip"}}} = Strict.strict(input, nil, nested)
+    end
+
+    test "skip with mixed nil and struct list elements" do
+      input = [nil, %A{foo: "a"}, nil, %A{foo: "b"}]
+
+      assert {:ok, [nil, %A{foo: "a"}, nil, %A{foo: "b"}]} =
+               Strict.strict(input, nil, __skip_recursive__: [A])
+    end
+
+    test "no skip config results in normal behavior" do
+      assert {:ok, %{foo: "x", bar: true}} = Strict.strict(%A{foo: "x", bar: true}, nil)
     end
   end
 end

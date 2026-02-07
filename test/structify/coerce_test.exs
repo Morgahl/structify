@@ -583,74 +583,151 @@ defmodule Structify.CoerceTest do
     end
   end
 
-  describe "__skip__" do
-    test "skips matching struct at current level" do
-      input = %A{foo: "keep", bar: true}
-      nested = [__skip__: [A]]
+  describe "__skip__ and __skip_recursive__" do
+    # -- __skip__: current level only --
 
-      assert %A{foo: "keep", bar: true} = Coerce.coerce(input, nil, nested)
+    test "skip preserves matching struct when converting to map" do
+      assert %A{foo: "keep", bar: true} = Coerce.coerce(%A{foo: "keep", bar: true}, nil, __skip__: [A])
     end
 
-    test "does not skip non-matching struct" do
-      input = %NotA{baz: 123, qux: "hello"}
-      nested = [__skip__: [A]]
-
-      assert %{baz: 123, qux: "hello"} = Coerce.coerce(input, nil, nested)
+    test "skip does not affect non-matching struct types" do
+      assert %{baz: 123, qux: "hello"} = Coerce.coerce(%NotA{baz: 123, qux: "hello"}, nil, __skip__: [A])
     end
 
-    test "does not propagate to deeper levels" do
+    test "skip does NOT propagate — nested structs still convert" do
       input = %{nested: %A{foo: "deep", bar: true}}
-      nested = [__skip__: [A], nested: [__to__: nil]]
-
-      result = Coerce.coerce(input, nil, nested)
+      result = Coerce.coerce(input, nil, __skip__: [A], nested: [__to__: nil])
       assert %{nested: %{foo: "deep", bar: true}} = result
     end
 
-    test "skips struct inside map field iteration" do
+    test "skip inside field-level nested config" do
       input = %{a: %A{foo: "skip_me", bar: true}, foo: "bar"}
-      nested = [a: [__to__: nil, __skip__: [A]]]
-
-      result = Coerce.coerce(input, B, nested)
+      result = Coerce.coerce(input, B, a: [__to__: nil, __skip__: [A]])
       assert %B{a: %A{foo: "skip_me", bar: true}, foo: "bar"} = result
     end
-  end
 
-  describe "__skip_recursive__" do
-    test "skips matching struct at current level" do
-      input = %A{foo: "keep", bar: true}
-      nested = [__skip_recursive__: [A]]
+    # -- __skip_recursive__: all levels --
 
-      assert %A{foo: "keep", bar: true} = Coerce.coerce(input, nil, nested)
+    test "skip_recursive preserves matching struct at top level" do
+      assert %A{foo: "keep"} = Coerce.coerce(%A{foo: "keep"}, nil, __skip_recursive__: [A])
     end
 
-    test "propagates to deeper levels" do
+    test "skip_recursive propagates to nested fields" do
       input = %{nested: %A{foo: "deep", bar: true}}
-      nested = [__skip_recursive__: [A], nested: [__to__: nil]]
-
-      result = Coerce.coerce(input, nil, nested)
+      result = Coerce.coerce(input, nil, __skip_recursive__: [A], nested: [__to__: nil])
       assert %{nested: %A{foo: "deep", bar: true}} = result
     end
 
-    test "propagates through multiple levels" do
-      input = %{b: %{a: %A{foo: "deep", bar: true}}}
-      nested = [__skip_recursive__: [A], b: [a: [__to__: nil]]]
-
+    test "skip_recursive propagates through 3+ levels" do
+      input = %{l1: %{l2: %{l3: %A{foo: "deep"}}}}
+      nested = [__skip_recursive__: [A], l1: [l2: [l3: [__to__: nil]]]]
       result = Coerce.coerce(input, nil, nested)
-      assert %{b: %{a: %A{foo: "deep", bar: true}}} = result
+      assert %{l1: %{l2: %{l3: %A{foo: "deep"}}}} = result
     end
 
-    test "skips in lists" do
-      input = %{items: [%A{foo: "a", bar: true}, %A{foo: "b", bar: false}]}
-      nested = [__skip_recursive__: [A], items: [__to__: nil]]
-
-      result = Coerce.coerce(input, nil, nested)
-      assert %{items: [%A{foo: "a", bar: true}, %A{foo: "b", bar: false}]} = result
+    test "skip_recursive preserves structs inside lists" do
+      input = %{items: [%A{foo: "a"}, %A{foo: "b"}]}
+      result = Coerce.coerce(input, nil, __skip_recursive__: [A], items: [__to__: nil])
+      assert %{items: [%A{foo: "a"}, %A{foo: "b"}]} = result
     end
 
-    test "no skip config results in normal behavior" do
+    test "skip_recursive with top-level list" do
+      input = [%A{foo: "a"}, %A{foo: "b"}]
+      result = Coerce.coerce(input, nil, __skip_recursive__: [A])
+      assert [%A{foo: "a"}, %A{foo: "b"}] = result
+    end
+
+    # -- multiple modules in skip list --
+
+    test "multiple modules in skip list" do
+      assert %A{foo: "a"} = Coerce.coerce(%A{foo: "a"}, nil, __skip__: [A, NotA])
+      assert %NotA{baz: 1} = Coerce.coerce(%NotA{baz: 1}, nil, __skip__: [A, NotA])
+    end
+
+    test "multiple modules in skip_recursive list" do
+      input = %{a: %A{foo: "a"}, nota: %NotA{baz: 1}}
+      nested = [__skip_recursive__: [A, NotA], a: [__to__: nil], nota: [__to__: nil]]
+      result = Coerce.coerce(input, nil, nested)
+      assert %{a: %A{foo: "a"}, nota: %NotA{baz: 1}} = result
+    end
+
+    # -- skip some, convert others --
+
+    test "skip one struct type while converting another in same map" do
+      input = %{keep: %A{foo: "preserve"}, convert: %NotA{baz: 99}}
+      nested = [__skip_recursive__: [A], keep: [__to__: nil], convert: [__to__: nil]]
+      result = Coerce.coerce(input, nil, nested)
+      assert %{keep: %A{foo: "preserve"}, convert: %{baz: 99, qux: "hello"}} = result
+    end
+
+    # -- skip + struct-to-struct conversion --
+
+    test "skip prevents struct-to-struct conversion" do
+      input = %NotA{baz: 99, qux: "keep"}
+      result = Coerce.coerce(input, A, __skip__: [NotA])
+      assert %NotA{baz: 99, qux: "keep"} = result
+    end
+
+    test "skip struct that is the same as target type is a no-op" do
+      input = %A{foo: "same", bar: true}
+      result = Coerce.coerce(input, A, __skip__: [A])
+      assert %A{foo: "same", bar: true} = result
+    end
+
+    # -- skip + module shorthand --
+
+    test "skip_recursive works alongside module shorthand syntax" do
+      input = %{a: %{foo: "convert"}, nota: %NotA{baz: 99}}
+      nested = [__skip_recursive__: [NotA], a: A, nota: [__to__: nil]]
+      result = Coerce.coerce(input, nil, nested)
+      assert %{a: %A{foo: "convert", bar: false}, nota: %NotA{baz: 99}} = result
+    end
+
+    # -- both __skip__ and __skip_recursive__ combined --
+
+    test "skip and skip_recursive can coexist" do
+      input = %{a: %A{foo: "local"}, nota: %NotA{baz: 1}, nested: %{deep: %A{foo: "deep"}}}
+
+      nested = [
+        __skip__: [A],
+        __skip_recursive__: [NotA],
+        a: [__to__: nil],
+        nota: [__to__: nil],
+        nested: [deep: [__to__: nil]]
+      ]
+
+      result = Coerce.coerce(input, nil, nested)
+      # __skip__ only affects top-level struct input, not struct values in map fields
+      # __skip_recursive__ propagates to all children — NotA stays everywhere
+      assert %{a: %{foo: "local", bar: false}, nota: %NotA{baz: 1}, nested: %{deep: %{foo: "deep"}}} = result
+    end
+
+    # -- map format nested config --
+
+    test "skip works with map format nested config" do
+      input = %A{foo: "keep", bar: true}
+      result = Coerce.coerce(input, nil, %{__skip__: [A]})
+      assert %A{foo: "keep", bar: true} = result
+    end
+
+    # -- edge cases --
+
+    test "empty skip list is a no-op" do
       input = %A{foo: "x", bar: true}
+      assert %{foo: "x", bar: true} = Coerce.coerce(input, nil, __skip__: [])
+    end
 
-      assert %{foo: "x", bar: true} = Coerce.coerce(input, nil)
+    test "nil values in data are unaffected by skip" do
+      input = %{a: nil, b: %A{foo: "skip"}}
+      nested = [__skip_recursive__: [A], a: A, b: [__to__: nil]]
+      result = Coerce.coerce(input, nil, nested)
+      assert %{a: nil, b: %A{foo: "skip"}} = result
+    end
+
+    test "skip with mixed nil and struct list elements" do
+      input = [nil, %A{foo: "a"}, nil, %A{foo: "b"}]
+      result = Coerce.coerce(input, nil, __skip_recursive__: [A])
+      assert [nil, %A{foo: "a"}, nil, %A{foo: "b"}] = result
     end
   end
 end
