@@ -1,75 +1,42 @@
 defmodule Structify.Convert do
   @moduledoc """
-  Structify.Convert provides lossless conversion functionality with explicit result tuples.
+  Structify.Convert performs lossless conversion with explicit result tuples.
 
-  This module performs lossless conversions with error domains that handle set intersection scenarios:
-  - `{:ok, result}` on successful conversion
-  - `{:error, reason}` on failure with specific error context for set mismatches
-  - `{:no_change, original}` when optimization determines no change is needed for memory efficiency
+  Returns `{:ok, result}` on successful conversion or `{:error, reason}` on failure.
+  Uses `struct/2` internally, which silently drops extra keys not defined on the target struct.
 
-  The `convert!/3` function unwraps the result tuples and raises on error.
+  `convert!/3` unwraps the result and raises on error.
 
-  Struct-to-struct conversions handle deeply nested sets with specific error domains for:
+  ## Key Behaviours
 
-  - **Inner Join**: Fields present in both source and target - successful conversion
-  - **Left Outer**: Fields in source but not target - data loss scenarios
-  - **Right Outer**: Fields in target but not source - missing data with defaults
-  - **Full Outer**: Union of all fields - handled via struct defaults and field filtering
-  - **Intersection Failures**: Type mismatches, invalid modules, constraint violations
-
-  The `{:error, reason}` tuple provides context for which intersection operation failed.
-
-    * If `to` is `nil`, the result will be a map.
-    * If `from` is `nil`, the result will be `{:no_change, nil}`.
-    * If `from` is a list, each element will be converted individually, dropping any `nil` list elements.
-    * If `from` is a struct of a well-known type (`Date`, `Time`, `NaiveDateTime`, `DateTime`), it will return `{:no_change, original}`.
-    * If `from` is a struct and `to` is a module, the result will be a lossy converted struct of type `to`.
-    * If `from` is a map and `to` is a module, the result will be a struct of type `to`.
-    * If `from` is a map and `to` is `nil`, the result will be a map.
-
-  # String Key Conversion
-
-  When converting maps to structs, string keys are automatically converted to atoms:
-
-    * String keys are converted to atoms using `String.to_existing_atom/1` when targeting structs
-    * If the atom doesn't exist, the key-value pair is filtered out (ignored)
-    * When targeting maps (`to` is `nil`), string keys are preserved as strings
-    * Non-string, non-atom keys are filtered out when targeting structs
-    * Mixed key types are handled gracefully with atom keys taking precedence
-
-  The `:no_change` result is returned when:
-  - Well-known structs (`Date`, `Time`, `NaiveDateTime`, `DateTime`) are encountered
-  - No actual transformations would occur (same type, no nested changes)
-  - Input is `nil` and no conversion rules apply
-  - Input matches the target type and no nested transformations are needed
+  - Map to struct: builds the target struct, dropping keys not in the struct definition
+  - Struct to struct: strips meta keys, re-builds as target type
+  - Struct/map to map (`to: nil`): strips meta keys, returns a plain map
+  - Well-known structs (`Date`, `Time`, `NaiveDateTime`, `DateTime`) pass through unchanged
+  - String keys are coerced to existing atoms via `String.to_existing_atom/1`; unresolvable strings are silently dropped
+  - Non-atom, non-string keys are silently dropped when targeting a struct
+  - `__skip__` in nested config: struct modules that pass through unchanged at current level
+  - `__skip_recursive__` in nested config: struct modules that pass through unchanged at all levels
 
   ## Examples
 
-      iex> input = %{name: "Alice", email: "alice@example.com", age: 30}
-      iex> Convert.convert(input, User)
+      iex> Convert.convert(%{name: "Alice", email: "alice@example.com", age: 30}, User)
       {:ok, %User{name: "Alice", email: "alice@example.com", age: 30}}
-
-      iex> input = %{name: "Alice", email: "alice@example.com", age: 30}
-      iex> Convert.convert([input, nil], User)
-      {:ok, [%User{name: "Alice", email: "alice@example.com", age: 30}]}
-
-      iex> Convert.convert(%{"name" => "Alice", "age" => 30}, User)
-      {:ok, %User{name: "Alice", age: 30}}
 
       iex> Convert.convert(%{name: "Alice", extra: 1}, User)
       {:ok, %User{name: "Alice"}}
 
       iex> Convert.convert(%User{name: "Alice"}, User)
-      {:no_change, %User{name: "Alice"}}
+      {:ok, %User{name: "Alice"}}
 
       iex> Convert.convert(nil, User)
-      {:no_change, nil}
+      {:ok, nil}
 
       iex> Convert.convert(%{name: "Alice"}, nil)
-      {:no_change, %{name: "Alice"}}
+      {:ok, %{name: "Alice"}}
 
       iex> Convert.convert(%{"name" => "Alice"}, nil)
-      {:no_change, %{"name" => "Alice"}}
+      {:ok, %{"name" => "Alice"}}
 
       iex> Convert.convert(%{user: %{name: "Alice"}}, nil, [user: User])
       {:ok, %{user: %User{name: "Alice"}}}
@@ -78,49 +45,72 @@ defmodule Structify.Convert do
       {:ok, %{user: %User{name: "Alice"}}}
 
       iex> Convert.convert(%{user: %{name: "Alice"}}, nil, [user: [__to__: nil]])
-      {:no_change, %{user: %{name: "Alice"}}}
+      {:ok, %{user: %{name: "Alice"}}}
 
       iex> Convert.convert(%{user: %{name: "Alice", nested_field: %{}}}, nil, [user: [nested_field: [__to__: User]]])
       {:ok, %{user: %{name: "Alice", nested_field: %User{}}}}
+
+      iex> Convert.convert([%{name: "Alice"}, nil], User)
+      {:ok, [%User{name: "Alice"}, nil]}
+
+      iex> Convert.convert(%{"name" => "Alice", "age" => 30}, User)
+      {:ok, %User{name: "Alice", age: 30}}
 
   """
   alias Structify.Constants
   alias Structify.Types
 
   @to_key Constants.to_key()
-  @meta_keys Constants.meta_keys()
   @well_known_structs Constants.well_known_structs()
+  @skip_key Constants.skip_key()
+  @skip_recursive_key Constants.skip_recursive_key()
 
   @typedoc """
-  Result of conversion operations with explicit success, error, or no-change indication.
-
-  Error format contains the exception module and target module being converted to.
+  Result of conversion operations.
   """
-  @type convert_result ::
-          {:ok, Types.structifiable() | nil}
-          | {:no_change, Types.structifiable() | nil}
-          | {:error, {module(), :not_struct | String.t()}}
+  @type convert_result :: {:ok, Types.structifiable() | nil} | {:error, term()}
 
   @doc """
   Converts `from` into the type specified by `to`, optionally using `nested` for nested conversion rules.
 
-  Returns `{:ok, result}` on successful conversion, `{:error, reason}` on failure,
-  or `{:no_change, original}` when optimization determines no change is needed.
+  Returns `{:ok, result}` on successful conversion or `{:error, reason}` on failure.
   """
   @spec convert(Types.structifiable() | nil, module() | nil, Types.nested()) :: convert_result()
-  def convert(from, to \\ nil, nested \\ [])
-
-  def convert(from, to, %{} = nested) do
-    convert(from, to, Map.to_list(nested))
+  def convert(from, to \\ nil, nested \\ []) do
+    case do_convert(from, to, nested) do
+      {:no_change, original} -> {:ok, original}
+      other -> other
+    end
   end
 
-  def convert([_ | _] = from, to, nested) do
-    for item <- from, not is_nil(item), reduce: {:no_change, []} do
+  @doc """
+  Converts `from` into the type specified by `to`, raising on error.
+
+  Returns the result directly on success, raises `ArgumentError` on error.
+  """
+  @spec convert!(Types.structifiable() | nil, module() | nil, Types.nested()) ::
+          Types.structifiable() | nil
+  def convert!(from, to \\ nil, nested \\ []) do
+    case convert(from, to, nested) do
+      {:ok, result} -> result
+      {:error, {:not_struct, mod}} -> raise ArgumentError, "#{inspect(mod)} does not define a struct"
+      {:error, msg} -> raise ArgumentError, msg
+    end
+  end
+
+  # -- Internal recursive implementation --
+
+  defp do_convert(from, to, %{} = nested) do
+    do_convert(from, to, Map.to_list(nested))
+  end
+
+  defp do_convert([_ | _] = from, to, nested) do
+    for item <- from, reduce: {:no_change, []} do
       {:error, reason} ->
         {:error, reason}
 
       {changed, acc} ->
-        case convert(item, to, nested) do
+        case do_convert(item, to, nested) do
           {:ok, coerced} -> {:ok, [coerced | acc]}
           {:no_change, original} -> {changed, [original | acc]}
           {:error, reason} -> {:error, reason}
@@ -133,37 +123,35 @@ defmodule Structify.Convert do
     end
   end
 
-  def convert(%{__struct__: to} = from, to, []) do
+  defp do_convert(%{__struct__: to} = from, to, []) do
     {:no_change, from}
   end
 
-  def convert(%{__struct__: struct} = from, _, _) when struct in @well_known_structs do
+  defp do_convert(%{__struct__: struct} = from, _, _) when struct in @well_known_structs do
     {:no_change, from}
   end
 
-  def convert(%_{} = from, to, nested) do
-    from
-    |> Map.drop(@meta_keys)
-    |> convert(to, nested)
-    |> case do
-      {:ok, result} ->
-        {:ok, result}
+  defp do_convert(%_{} = from, to, nested) when is_list(nested) do
+    skips = extract_skips(nested)
 
-      {:no_change, fields} ->
-        case to do
-          nil -> {:ok, Map.drop(from, @meta_keys)}
-          mod when is_atom(mod) -> maybe_struct(fields, mod)
-        end
-
-      {:error, reason} ->
-        {:error, reason}
+    if should_skip?(from.__struct__, skips) do
+      {:no_change, from}
+    else
+      do_convert_struct(from, to, nested)
     end
   end
 
-  def convert(%{} = from, to, nested) when is_list(nested) do
+  defp do_convert(%_{} = from, to, nested) do
+    do_convert_struct(from, to, nested)
+  end
+
+  defp do_convert(%{} = from, to, nested) when is_list(nested) do
+    {_skip, skip_recursive} = extract_skips(nested)
+    field_nested = Keyword.drop(nested, [@skip_key, @skip_recursive_key])
+
     for {k, v} <- from,
         atom_k = coerce_key(k, to),
-        atom_k not in @meta_keys,
+        atom_k not in Constants.meta_keys(),
         reduce: {:no_change, []} do
       {:error, reason} ->
         {:error, reason}
@@ -172,15 +160,17 @@ defmodule Structify.Convert do
         output_key = if to == nil, do: k, else: atom_k
         lookup_key = if is_atom(atom_k), do: atom_k, else: nil
 
-        case nested[lookup_key] do
+        case field_nested[lookup_key] do
           nested_k when is_list(nested_k) ->
-            convert(v, nested_k[@to_key], nested_k)
+            do_convert(v, nested_k[@to_key], propagate_skip_recursive(nested_k, skip_recursive))
 
           %{__to__: to_module} = nested_k ->
-            convert(v, to_module, Map.to_list(Map.drop(nested_k, [:__to__])))
+            child = Map.to_list(Map.drop(nested_k, [:__to__]))
+            do_convert(v, to_module, propagate_skip_recursive(child, skip_recursive))
 
           nested_k ->
-            convert(v, nested_k, [])
+            child = if skip_recursive == [], do: [], else: [{@skip_recursive_key, skip_recursive}]
+            do_convert(v, nested_k, child)
         end
         |> case do
           {:ok, coerced} -> {:ok, [{output_key, coerced} | acc]}
@@ -203,24 +193,42 @@ defmodule Structify.Convert do
     end
   end
 
-  def convert(from, _, _) do
+  defp do_convert(from, _, _) do
     {:no_change, from}
   end
 
-  @doc """
-  Converts `from` into the type specified by `to`, optionally using `nested` for nested conversion rules.
+  defp do_convert_struct(%_{} = from, to, nested) do
+    from
+    |> Map.drop(Constants.meta_keys())
+    |> do_convert(to, nested)
+    |> case do
+      {:ok, result} ->
+        {:ok, result}
 
-  Raises an exception on error, returns the result directly on success or no-change.
-  """
-  @spec convert!(Types.structifiable() | nil, module() | nil, Types.nested()) ::
-          Types.structifiable() | nil
-  def convert!(from, to \\ nil, nested \\ []) do
-    case convert(from, to, nested) do
-      {:ok, result} -> result
-      {:no_change, original} -> original
-      {:error, {mod, :not_struct}} -> raise ArgumentError, "#{inspect(mod)} is not a struct"
-      {:error, {_mod, msg}} -> raise ArgumentError, msg
+      {:no_change, fields} ->
+        case to do
+          nil -> {:ok, Map.drop(from, Constants.meta_keys())}
+          mod when is_atom(mod) -> maybe_struct(fields, mod)
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
+  end
+
+  defp extract_skips(nested) when is_list(nested) do
+    {Keyword.get(nested, @skip_key, []), Keyword.get(nested, @skip_recursive_key, [])}
+  end
+
+  defp should_skip?(struct_mod, {skip, skip_recursive}) do
+    struct_mod in skip or struct_mod in skip_recursive
+  end
+
+  defp propagate_skip_recursive(child, []), do: child
+
+  defp propagate_skip_recursive(child, sr) when is_list(child) do
+    existing = Keyword.get(child, @skip_recursive_key, [])
+    Keyword.put(child, @skip_recursive_key, Enum.uniq(existing ++ sr))
   end
 
   defp coerce_key(k, nil), do: k
@@ -240,18 +248,10 @@ defmodule Structify.Convert do
 
   defp maybe_struct(fields, to) do
     case function_exported?(to, :__struct__, 1) do
-      true -> {:ok, struct!(to, filter_valid_fields(fields, to))}
-      false -> {:error, {to, :not_struct}}
+      true -> {:ok, struct(to, fields)}
+      false -> {:error, {:not_struct, to}}
     end
   rescue
-    e in ArgumentError -> {:error, {to, e.message}}
-  end
-
-  defp filter_valid_fields(fields, mod) do
-    struct_keys = Map.keys(struct(mod))
-
-    for {key, value} <- fields,
-        key in struct_keys,
-        do: {key, value}
+    e in [ArgumentError, KeyError] -> {:error, Exception.message(e)}
   end
 end

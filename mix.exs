@@ -32,7 +32,8 @@ defmodule Structify.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:ex_doc, "~> 0.34", only: :dev, runtime: false, warn_if_outdated: true}
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false, warn_if_outdated: true},
+      {:excoveralls, "~> 0.18", only: :test}
     ]
   end
 

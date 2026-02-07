@@ -1,34 +1,27 @@
 defmodule Structify.Destruct do
   @moduledoc """
-  Structify.Destruct provides `destruct/1`, a utility to recursively remove meta keys and deeply clean maps, structs, and lists, skipping well-known structs.
+  Structify.Destruct recursively strips struct meta keys, converting structs to plain maps.
 
-  ## Destructuring Rules
-
-  - If the input is a list, recursively destructs each element, skipping any `nil` values.
-  - If the input is a map or struct, recursively destructs all values, removing meta keys (`:__struct__`, `:__meta__`).
-  - If the input is a struct of a well-known type (`Date`, `Time`, `NaiveDateTime`, `DateTime`), it is returned unchanged.
-  - For all other values (numbers, strings, atoms, etc.), returns the value unchanged.
-
-  ## Meta Key Removal
-
-  - Meta keys (`:__struct__`, `:__meta__`) are dropped from all maps and structs except well-known structs.
-  - Nested meta keys are also removed recursively.
+  - Lists: each element is destructured recursively
+  - Maps and structs: meta keys (`:__struct__`, and `:__meta__` when Ecto is loaded) are removed, values are processed recursively
+  - Well-known structs (`Date`, `Time`, `NaiveDateTime`, `DateTime`) pass through unchanged
+  - Primitives (numbers, strings, atoms, `nil`) pass through unchanged
 
   ## Examples
 
-      iex> Destruct.destruct(%User{name: "Alice", email: "alice@example.com", __meta__: :foo})
+      iex> Destruct.destruct(%User{name: "Alice", email: "alice@example.com"})
       %{name: "Alice", email: "alice@example.com"}
 
       iex> Destruct.destruct([%User{name: "Alice"}, nil, 1])
-      [%{name: "Alice", email: nil}, 1]
+      [%{name: "Alice", email: nil}, nil, 1]
 
-      iex> Destruct.destruct(%{"foo" => 1, :bar => 2, __meta__: :skip})
+      iex> Destruct.destruct(%{"foo" => 1, :bar => 2})
       %{"foo" => 1, :bar => 2}
 
       iex> Destruct.destruct(~D[2020-01-01])
       ~D[2020-01-01]
 
-      iex> Destruct.destruct(%{user: %User{name: "Alice", __meta__: :foo}})
+      iex> Destruct.destruct(%{user: %User{name: "Alice"}})
       %{user: %{name: "Alice", email: nil}}
 
       iex> Destruct.destruct(nil)
@@ -39,14 +32,13 @@ defmodule Structify.Destruct do
   alias Structify.Constants
   alias Structify.Types
 
-  @meta_keys Constants.meta_keys()
   @well_known_structs Constants.well_known_structs()
 
   @spec destruct(Types.structifiable()) :: Types.structifiable()
   def destruct(from)
 
   def destruct([_ | _] = from) do
-    for item <- from, not is_nil(item) do
+    for item <- from do
       destruct(item)
     end
   end
@@ -57,12 +49,14 @@ defmodule Structify.Destruct do
 
   def destruct(%_{} = from) do
     from
-    |> Map.drop(@meta_keys)
+    |> Map.drop(Constants.meta_keys())
     |> destruct()
   end
 
   def destruct(%{} = from) do
-    for {k, v} <- from, k not in @meta_keys do
+    meta_keys = Constants.meta_keys()
+
+    for {k, v} <- from, k not in meta_keys do
       {k, destruct(v)}
     end
     |> Map.new()

@@ -1,75 +1,81 @@
 defmodule Structify do
   @moduledoc """
-  Structify provides utilities to convert between structs, maps, and lists recursively.
+  Structify provides recursive conversion between maps, structs, and lists.
 
-  # Two Conversion Approaches
+  Three conversion strategies with increasing strictness:
 
-  Coerce - Lossy conversions with simple return values:
-  - `coerce/3` returns results directly
-  - For when error handling isn't critical
-  - For trusted data transformations
+  | Function    | Returns          | Extra keys   | Missing enforced keys (nil default) | Missing enforced keys (has default) | Bad string keys |
+  |-------------|------------------|--------------|-------------------------------------|-------------------------------------|-----------------|
+  | `coerce/3`  | value directly   | Dropped      | Gets defaults                       | Gets defaults                       | Dropped         |
+  | `convert/3` | `{:ok, _}` / `{:error, _}` | Dropped | Gets defaults                | Gets defaults                       | Dropped         |
+  | `strict/3`  | `{:ok, _}` / `{:error, _}` | Error  | Error                               | Uses default                        | Error           |
 
-  Convert - Lossless conversions with explicit result tuples:
-  - `convert/3` returns `{:ok, result}`, `{:error, reason}`, or `{:no_change, original}`
-  - `convert!/3` unwraps results and raises on error
-  - Provides error information for debugging
+  Plus `Structify.Destruct` for recursively stripping struct meta keys.
 
-  # Key Features
+  All strategies share:
+  - Module shorthand syntax: `[field: MyStruct]` equivalent to `[field: [__to__: MyStruct]]`
+  - Deep nesting: recursive transformations at any depth
+  - Well-known type preservation: `Date`, `Time`, `NaiveDateTime`, `DateTime` pass through unchanged
+  - String key coercion to existing atoms when targeting structs
+  - `__skip__`: struct modules that pass through unchanged at the current nesting level
+  - `__skip_recursive__`: struct modules that pass through unchanged at all nesting levels
 
-  - Module Shorthand Syntax: `field: MyStruct` equivalent to `field: [__to__: MyStruct]`
-  - Deep Nesting: Recursive transformations at any depth
-  - List Processing: Automatic nil filtering and element-wise conversion
-  - Well-known Types: Date/Time structs preserved unchanged
-  - Mixed Syntax: Combine shorthand and full syntax in same configuration
+  ## Examples
 
-  # Examples
-
-      # Basic conversion
       iex> Structify.coerce(%{name: "Alice"}, User)
       %User{name: "Alice"}
 
-      # With explicit result tuples
       iex> Structify.convert(%{name: "Alice"}, User)
       {:ok, %User{name: "Alice"}}
 
-      # Nested with shorthand syntax
+      iex> Structify.strict(%{name: "Alice"}, User)
+      {:ok, %User{name: "Alice"}}
+
       iex> input = %{user: %{name: "Alice"}, company: %{name: "TechCorp"}}
       iex> nested = [user: User, company: Company]
       iex> Structify.coerce(input, nil, nested)
       %{user: %User{name: "Alice"}, company: %Company{name: "TechCorp"}}
 
-  See individual function documentation for detailed usage patterns.
+  See individual module documentation for detailed usage patterns.
   """
 
   @doc """
-  Coerces `from` into the type specified by `to`, optionally using `nested` for nested coercion rules.
+  Coerces `from` into the type specified by `to`. Lossy, returns values directly.
 
-  See `Structify.Coerce` module documentation for details.
+  See `Structify.Coerce` for details.
   """
   defdelegate coerce(from, to \\ nil, nested \\ []), to: Structify.Coerce
 
   @doc """
-  Converts `from` into the type specified by `to` with explicit result tuples.
+  Converts `from` into the type specified by `to` with `{:ok, result}` / `{:error, reason}` tuples.
 
-  Returns `{:ok, result}`, `{:error, reason}`, or `{:no_change, original}`.
-
-  See `Structify.Convert` module documentation for details.
+  Extra keys are silently dropped. See `Structify.Convert` for details.
   """
   defdelegate convert(from, to \\ nil, nested \\ []), to: Structify.Convert
 
   @doc """
-  Converts `from` into the type specified by `to`, raising on error.
-
-  Returns the result directly on success or no-change, raises on error.
-
-  See `Structify.Convert` module documentation for details.
+  Like `convert/3` but raises on error, returns the result directly on success.
   """
   defdelegate convert!(from, to \\ nil, nested \\ []), to: Structify.Convert
 
   @doc """
-  Deeply removes structures from `from`, skipping known structs.
+  Strictly converts `from` into the type specified by `to` with `{:ok, result}` / `{:error, reason}` tuples.
 
-  See `Structify.Destruct` module documentation for details.
+  Errors on extra keys, missing enforced keys with nil defaults, unresolvable string keys, and
+  non-atom/non-string keys. Missing enforced keys with non-nil defaults fall back to the default.
+  See `Structify.Strict` for details.
+  """
+  defdelegate strict(from, to \\ nil, nested \\ []), to: Structify.Strict
+
+  @doc """
+  Like `strict/3` but raises on error, returns the result directly on success.
+  """
+  defdelegate strict!(from, to \\ nil, nested \\ []), to: Structify.Strict
+
+  @doc """
+  Recursively strips struct meta keys, converting structs to plain maps.
+
+  See `Structify.Destruct` for details.
   """
   defdelegate destruct(from), to: Structify.Destruct
 end

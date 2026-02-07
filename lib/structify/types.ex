@@ -1,6 +1,6 @@
 defmodule Structify.Types do
   @moduledoc """
-  Common type definitions shared across Structify modules.
+  Structify.Types provides common type definitions shared across Structify modules.
   """
 
   @typedoc """
@@ -14,7 +14,17 @@ defmodule Structify.Types do
   Note: Well-known structs like `Date`, `Time`, `NaiveDateTime`, and `DateTime`
   pass through unchanged regardless of the target type.
   """
-  @type structifiable() :: struct() | %{atom() => any()} | [structifiable()]
+  @type structifiable() ::
+          [structifiable()]
+          | %{
+              :__struct__ => atom(),
+              optional(atom()) => structifiable()
+            }
+          | %{
+              optional(atom() | String.t()) => structifiable()
+            }
+          | nil
+          | any()
 
   @typedoc """
   Configuration for nested conversion rules.
@@ -32,12 +42,16 @@ defmodule Structify.Types do
     - `module()` - convert to the specified struct type
     - `nil` - convert to a map
     - omitted - preserve current type
+  - `:__skip__` key specifies struct modules to skip at the current nesting level
+  - `:__skip_recursive__` key specifies struct modules to skip at all nesting levels
   - Other atom keys map to further nested configurations or module shorthand
   - Module shorthand: `field: MyStruct` is equivalent to `field: [__to__: MyStruct]`
   """
   @type nested_kw ::
           [
             {:__to__, module() | nil}
+            | {:__skip__, [module()]}
+            | {:__skip_recursive__, [module()]}
             | {atom(), nested() | module()}
           ]
 
@@ -48,11 +62,15 @@ defmodule Structify.Types do
     - `module()` - convert to the specified struct type
     - `nil` - convert to a map
     - omitted - preserve current type
+  - `:__skip__` key specifies struct modules to skip at the current nesting level
+  - `:__skip_recursive__` key specifies struct modules to skip at all nesting levels
   - Other atom keys map to further nested configurations or module shorthand
   - Module shorthand: `field: MyStruct` is equivalent to `field: [__to__: MyStruct]`
   """
   @type nested_map :: %{
           optional(:__to__) => module() | nil,
+          optional(:__skip__) => [module()],
+          optional(:__skip_recursive__) => [module()],
           optional(atom()) => nested() | module()
         }
 end

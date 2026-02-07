@@ -1,5 +1,5 @@
 defmodule ReadmeTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
   import ExUnit.DocTest
 
   # Define the structs used in README examples

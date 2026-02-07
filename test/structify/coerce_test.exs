@@ -93,11 +93,11 @@ defmodule Structify.CoerceTest do
                Coerce.coerce(input, B, nested)
     end
 
-    test "nested list with nils is filtered" do
+    test "nested list with nils preserves nils" do
       input = %{a: [%{foo: "a"}, nil, %{foo: "b"}]}
       nested = [a: [__to__: A]]
 
-      assert %B{a: [%A{foo: "a", bar: false}, %A{foo: "b", bar: false}], foo: "bar"} =
+      assert %B{a: [%A{foo: "a", bar: false}, nil, %A{foo: "b", bar: false}], foo: "bar"} =
                Coerce.coerce(input, B, nested)
     end
 
@@ -210,10 +210,10 @@ defmodule Structify.CoerceTest do
                Coerce.coerce(input, nil)
     end
 
-    test "drops nils" do
+    test "nils are preserved in lists" do
       input = [%{foo: "a"}, nil, %{foo: "b"}]
 
-      assert [%A{foo: "a", bar: false}, %A{foo: "b", bar: false}] = Coerce.coerce(input, A)
+      assert [%A{foo: "a", bar: false}, nil, %A{foo: "b", bar: false}] = Coerce.coerce(input, A)
     end
 
     test "empty list returns empty list" do
@@ -223,7 +223,7 @@ defmodule Structify.CoerceTest do
     test "list with mixed valid and nil elements" do
       input = [%{foo: "a"}, nil, %{foo: "b"}, nil]
 
-      assert [%A{foo: "a", bar: false}, %A{foo: "b", bar: false}] = Coerce.coerce(input, A)
+      assert [%A{foo: "a", bar: false}, nil, %A{foo: "b", bar: false}, nil] = Coerce.coerce(input, A)
     end
   end
 
@@ -248,7 +248,7 @@ defmodule Structify.CoerceTest do
     end
   end
 
-  describe "date/time/dateime passthrough" do
+  describe "date/time/datetime passthrough" do
     test "Date is returned unchanged" do
       d = ~D[2025-09-18]
       assert ^d = Coerce.coerce(d, nil)
@@ -271,6 +271,44 @@ defmodule Structify.CoerceTest do
       {:ok, dt} = DateTime.from_naive(~N[2025-09-18 12:34:56], "Etc/UTC")
       assert ^dt = Coerce.coerce(dt, nil)
       assert ^dt = Coerce.coerce(dt, A)
+    end
+  end
+
+  describe "well-known structs passthrough" do
+    test "Range is returned unchanged" do
+      r = 1..10//2
+      assert ^r = Coerce.coerce(r, nil)
+      assert ^r = Coerce.coerce(r, A)
+    end
+
+    test "Regex is returned unchanged" do
+      r = ~r/foo/i
+      assert ^r = Coerce.coerce(r, nil)
+      assert ^r = Coerce.coerce(r, A)
+    end
+
+    test "URI is returned unchanged" do
+      u = URI.parse("https://example.com/path?q=1")
+      assert ^u = Coerce.coerce(u, nil)
+      assert ^u = Coerce.coerce(u, A)
+    end
+
+    test "MapSet is returned unchanged" do
+      s = MapSet.new([1, 2, 3])
+      assert ^s = Coerce.coerce(s, nil)
+      assert ^s = Coerce.coerce(s, A)
+    end
+
+    test "Version is returned unchanged" do
+      v = Version.parse!("1.2.3")
+      assert ^v = Coerce.coerce(v, nil)
+      assert ^v = Coerce.coerce(v, A)
+    end
+
+    test "Date.Range is returned unchanged" do
+      dr = Date.range(~D[2025-01-01], ~D[2025-12-31])
+      assert ^dr = Coerce.coerce(dr, nil)
+      assert ^dr = Coerce.coerce(dr, A)
     end
   end
 
@@ -542,6 +580,77 @@ defmodule Structify.CoerceTest do
 
       result = Coerce.coerce(input, A, nested)
       assert %A{foo: nil, bar: false} = result
+    end
+  end
+
+  describe "__skip__" do
+    test "skips matching struct at current level" do
+      input = %A{foo: "keep", bar: true}
+      nested = [__skip__: [A]]
+
+      assert %A{foo: "keep", bar: true} = Coerce.coerce(input, nil, nested)
+    end
+
+    test "does not skip non-matching struct" do
+      input = %NotA{baz: 123, qux: "hello"}
+      nested = [__skip__: [A]]
+
+      assert %{baz: 123, qux: "hello"} = Coerce.coerce(input, nil, nested)
+    end
+
+    test "does not propagate to deeper levels" do
+      input = %{nested: %A{foo: "deep", bar: true}}
+      nested = [__skip__: [A], nested: [__to__: nil]]
+
+      result = Coerce.coerce(input, nil, nested)
+      assert %{nested: %{foo: "deep", bar: true}} = result
+    end
+
+    test "skips struct inside map field iteration" do
+      input = %{a: %A{foo: "skip_me", bar: true}, foo: "bar"}
+      nested = [a: [__to__: nil, __skip__: [A]]]
+
+      result = Coerce.coerce(input, B, nested)
+      assert %B{a: %A{foo: "skip_me", bar: true}, foo: "bar"} = result
+    end
+  end
+
+  describe "__skip_recursive__" do
+    test "skips matching struct at current level" do
+      input = %A{foo: "keep", bar: true}
+      nested = [__skip_recursive__: [A]]
+
+      assert %A{foo: "keep", bar: true} = Coerce.coerce(input, nil, nested)
+    end
+
+    test "propagates to deeper levels" do
+      input = %{nested: %A{foo: "deep", bar: true}}
+      nested = [__skip_recursive__: [A], nested: [__to__: nil]]
+
+      result = Coerce.coerce(input, nil, nested)
+      assert %{nested: %A{foo: "deep", bar: true}} = result
+    end
+
+    test "propagates through multiple levels" do
+      input = %{b: %{a: %A{foo: "deep", bar: true}}}
+      nested = [__skip_recursive__: [A], b: [a: [__to__: nil]]]
+
+      result = Coerce.coerce(input, nil, nested)
+      assert %{b: %{a: %A{foo: "deep", bar: true}}} = result
+    end
+
+    test "skips in lists" do
+      input = %{items: [%A{foo: "a", bar: true}, %A{foo: "b", bar: false}]}
+      nested = [__skip_recursive__: [A], items: [__to__: nil]]
+
+      result = Coerce.coerce(input, nil, nested)
+      assert %{items: [%A{foo: "a", bar: true}, %A{foo: "b", bar: false}]} = result
+    end
+
+    test "no skip config results in normal behavior" do
+      input = %A{foo: "x", bar: true}
+
+      assert %{foo: "x", bar: true} = Coerce.coerce(input, nil)
     end
   end
 end
